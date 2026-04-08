@@ -1,0 +1,442 @@
+From 37526ed81847cbfbb48ab77b6a44e3507cb4b57e Mon Sep 17 00:00:00 2001
+From: fdavids77 <fdavids77@users.noreply.github.com>
+Date: Wed, 8 Apr 2026 06:44:53 +0000
+Subject: [PATCH] feat: add WA 2.26.12.xx support, clone support (clone1-7),
+ auto-update workflow
+
+- Added 2.26.12.xx to supported_versions_wpp and supported_versions_business
+- Added isWhatsAppPackage()/isWppOrClone() helpers in FeatureLoader
+- Updated WppXposed, AntiUpdater, ScopeHook to recognise clone packages
+- Added com.whatsapp.clone1-7 to LSPosed scope array
+- Added auto-update-versions.yml: daily check for new WA versions
+- Fixed android.yml: workflow_dispatch now works, added main branch trigger
+- Added AUTO-BUILD-SETUP.md with GitHub Secrets setup guide
+---
+ .github/workflows/android.yml                 |   7 +-
+ .github/workflows/auto-update-versions.yml    | 168 ++++++++++++++++++
+ AUTO-BUILD-SETUP.md                           |  68 +++++++
+ .../java/com/wmods/wppenhacer/WppXposed.java  |   4 +-
+ .../wmods/wppenhacer/xposed/AntiUpdater.java  |   2 +-
+ .../wppenhacer/xposed/bridge/ScopeHook.java   |   4 +-
+ .../wppenhacer/xposed/core/FeatureLoader.java |  22 ++-
+ app/src/main/res/values/arrays.xml            |   9 +
+ changelog.txt                                 |   3 +-
+ 9 files changed, 278 insertions(+), 9 deletions(-)
+ create mode 100644 .github/workflows/auto-update-versions.yml
+ create mode 100644 AUTO-BUILD-SETUP.md
+
+diff --git a/.github/workflows/android.yml b/.github/workflows/android.yml
+index 8dc54a27..b3bb7acf 100644
+--- a/.github/workflows/android.yml
++++ b/.github/workflows/android.yml
+@@ -2,7 +2,8 @@ name: Android CI
+ 
+ on:
+   push:
+-    branches: [ "master", "feature/*" ]
++    branches: [ "master", "main", "feature/*" ]
++  workflow_dispatch:
+ jobs:
+   build:
+     permissions: write-all
+@@ -10,7 +11,9 @@ jobs:
+     env:
+       BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+       CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+-    if: github.event_name == 'push' && !contains(github.event.head_commit.message, 'Merge')
++    if: >-
++      (github.event_name == 'push' && !contains(github.event.head_commit.message, 'Merge'))
++      || github.event_name == 'workflow_dispatch'
+     steps:
+       - uses: actions/checkout@v6
+       - name: set up JDK 17
+diff --git a/.github/workflows/auto-update-versions.yml b/.github/workflows/auto-update-versions.yml
+new file mode 100644
+index 00000000..95239bdd
+--- /dev/null
++++ b/.github/workflows/auto-update-versions.yml
+@@ -0,0 +1,168 @@
++name: Auto-Update WhatsApp Versions
++
++on:
++  schedule:
++    # Run daily at 06:00 UTC (08:00 SAST)
++    - cron: '0 6 * * *'
++  workflow_dispatch:
++    inputs:
++      force_build:
++        description: 'Force build even if no new version found'
++        required: false
++        default: 'false'
++        type: boolean
++
++jobs:
++  check-and-update:
++    runs-on: ubuntu-latest
++    permissions: write-all
++
++    steps:
++      - uses: actions/checkout@v6
++        with:
++          token: ${{ secrets.GITHUB_TOKEN }}
++
++      - name: Check for new WhatsApp versions
++        id: check_version
++        run: |
++          # Extract currently supported versions from arrays.xml
++          CURRENT_VERSIONS=$(grep -oP '2\.\d+\.\d+\.xx' app/src/main/res/values/arrays.xml | sort -u)
++          echo "Current supported versions:"
++          echo "$CURRENT_VERSIONS"
++
++          # Get the highest currently supported minor version (e.g., 12 from 2.26.12.xx)
++          HIGHEST_MINOR=$(echo "$CURRENT_VERSIONS" | grep -oP '2\.26\.\K\d+' | sort -n | tail -1)
++          echo "Highest supported minor: $HIGHEST_MINOR"
++
++          # Check Play Store / APKMirror for latest WhatsApp version
++          # Method 1: Check APKPure (most reliable scraping target)
++          LATEST_INFO=$(curl -sL "https://apkpure.net/whatsapp-android/com.whatsapp" \
++            -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
++            | grep -oP '2\.26\.\d+\.\d+' | head -1 || true)
++
++          # Method 2: Fallback — check uptodown
++          if [ -z "$LATEST_INFO" ]; then
++            LATEST_INFO=$(curl -sL "https://whatsapp.en.uptodown.com/android" \
++              -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
++              | grep -oP '2\.26\.\d+\.\d+' | head -1 || true)
++          fi
++
++          # Method 3: Fallback — check WABetaInfo
++          if [ -z "$LATEST_INFO" ]; then
++            LATEST_INFO=$(curl -sL "https://wabetainfo.com/" \
++              -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
++              | grep -oP '2\.26\.\d+\.\d+' | sort -t. -k3 -n | tail -1 || true)
++          fi
++
++          echo "Latest version found online: $LATEST_INFO"
++
++          if [ -z "$LATEST_INFO" ]; then
++            echo "Could not determine latest WhatsApp version"
++            echo "new_versions_found=false" >> $GITHUB_OUTPUT
++            exit 0
++          fi
++
++          # Extract the minor version from the latest (e.g., 14 from 2.26.14.1)
++          LATEST_MINOR=$(echo "$LATEST_INFO" | grep -oP '2\.26\.\K\d+')
++          echo "Latest minor version: $LATEST_MINOR"
++
++          # Calculate which new versions need adding
++          NEW_VERSIONS=""
++          NEXT=$((HIGHEST_MINOR + 1))
++          while [ "$NEXT" -le "$LATEST_MINOR" ]; do
++            NEW_VERSIONS="$NEW_VERSIONS 2.26.${NEXT}.xx"
++            NEXT=$((NEXT + 1))
++          done
++
++          if [ -z "$NEW_VERSIONS" ] && [ "${{ inputs.force_build }}" != "true" ]; then
++            echo "No new versions to add (latest $LATEST_MINOR <= supported $HIGHEST_MINOR)"
++            echo "new_versions_found=false" >> $GITHUB_OUTPUT
++            exit 0
++          fi
++
++          echo "New versions to add:$NEW_VERSIONS"
++          echo "new_versions_found=true" >> $GITHUB_OUTPUT
++          echo "new_versions=$NEW_VERSIONS" >> $GITHUB_OUTPUT
++          echo "latest_minor=$LATEST_MINOR" >> $GITHUB_OUTPUT
++          echo "highest_minor=$HIGHEST_MINOR" >> $GITHUB_OUTPUT
++
++      - name: Update arrays.xml with new versions
++        if: steps.check_version.outputs.new_versions_found == 'true'
++        run: |
++          NEW_VERSIONS="${{ steps.check_version.outputs.new_versions }}"
++          HIGHEST="${{ steps.check_version.outputs.highest_minor }}"
++
++          for VERSION in $NEW_VERSIONS; do
++            echo "Adding $VERSION to supported versions..."
++
++            # Add to supported_versions_wpp (insert before closing tag)
++            sed -i "/<string-array name=\"supported_versions_wpp\">/,/<\/string-array>/ {
++              /<item>2\.26\.${HIGHEST}\.xx<\/item>/a\\        <item>${VERSION}<\/item>
++            }" app/src/main/res/values/arrays.xml
++
++            # Add to supported_versions_business (insert before closing tag)
++            sed -i "/<string-array name=\"supported_versions_business\">/,/<\/string-array>/ {
++              /<item>2\.26\.${HIGHEST}\.xx<\/item>/a\\        <item>${VERSION}<\/item>
++            }" app/src/main/res/values/arrays.xml
++
++            # Update HIGHEST for next iteration so insertions chain correctly
++            HIGHEST=$(echo "$VERSION" | grep -oP '2\.26\.\K\d+')
++          done
++
++          # Update changelog
++          echo "[ADDED]" > changelog.txt
++          echo "* Added support for WA/WB$NEW_VERSIONS (auto-update)" >> changelog.txt
++
++          echo "Updated arrays.xml:"
++          grep -A20 "supported_versions_wpp" app/src/main/res/values/arrays.xml | head -25
++
++      - name: Commit and push changes
++        if: steps.check_version.outputs.new_versions_found == 'true'
++        run: |
++          git config user.name "github-actions[bot]"
++          git config user.email "github-actions[bot]@users.noreply.github.com"
++          git add app/src/main/res/values/arrays.xml changelog.txt
++          git commit -m "feat: add support for WA/WB${{ steps.check_version.outputs.new_versions }} (auto-update)"
++          git push
++
++      # The push above triggers the Android CI workflow which builds + releases the APK
++      # But we also build here as a fallback in case the CI workflow doesn't trigger
++
++      - name: Set up JDK 17
++        if: steps.check_version.outputs.new_versions_found == 'true'
++        uses: actions/setup-java@v5
++        with:
++          java-version: '17'
++          distribution: 'temurin'
++          cache: gradle
++
++      - name: Write signing key
++        if: steps.check_version.outputs.new_versions_found == 'true'
++        env:
++          KEY_STORE: ${{ secrets.KEY_STORE }}
++        run: |
++          if [ ! -z "$KEY_STORE" ]; then
++            echo androidStorePassword='${{ secrets.KEY_STORE_PASSWORD }}' >> gradle.properties
++            echo androidKeyAlias='${{ secrets.ALIAS }}' >> gradle.properties
++            echo androidKeyPassword='${{ secrets.KEY_PASSWORD }}' >> gradle.properties
++            echo androidStoreFile='key.jks' >> gradle.properties
++            echo "$KEY_STORE" | base64 --decode > key.jks
++          fi
++
++      - name: Build APKs
++        if: steps.check_version.outputs.new_versions_found == 'true'
++        run: |
++          chmod +x gradlew
++          ./gradlew assembleWhatsappDebug assembleBusinessDebug -Pminify=true
++
++      - name: Create release
++        if: steps.check_version.outputs.new_versions_found == 'true'
++        uses: softprops/action-gh-release@v2
++        with:
++          token: ${{ secrets.GITHUB_TOKEN }}
++          name: "WaEnhancer — WA/WB${{ steps.check_version.outputs.new_versions }}"
++          body_path: changelog.txt
++          files: |
++            app/build/outputs/apk/whatsapp/debug/app-whatsapp-debug.apk
++            app/build/outputs/apk/business/debug/app-business-debug.apk
++          tag_name: "auto-2.26.${{ steps.check_version.outputs.latest_minor }}"
+diff --git a/AUTO-BUILD-SETUP.md b/AUTO-BUILD-SETUP.md
+new file mode 100644
+index 00000000..019bd3a4
+--- /dev/null
++++ b/AUTO-BUILD-SETUP.md
+@@ -0,0 +1,68 @@
++# WaEnhancer Auto-Build Setup Guide
++
++## What was changed
++
++### 1. `arrays.xml` — Added 2.26.12.xx support
++### 2. `android.yml` — Fixed workflow_dispatch trigger, added `main` branch
++### 3. `auto-update-versions.yml` — NEW: Daily auto-check for new WhatsApp versions
++
++---
++
++## GitHub Secrets Setup
++
++Go to: **Repository → Settings → Secrets and variables → Actions → New repository secret**
++
++Add these 4 secrets:
++
++| Secret Name        | Value                                    |
++|--------------------|------------------------------------------|
++| KEY_STORE          | (paste the base64 keystore below)        |
++| KEY_STORE_PASSWORD | waenhancer123                            |
++| ALIAS              | waenhancer                               |
++| KEY_PASSWORD       | waenhancer123                            |
++
++### KEY_STORE base64 value:
++Copy the ENTIRE contents of the file `keystore-base64.txt` (included in outputs).
++
++---
++
++## How to push changes
++
++```bash
++cd WaEnhancer
++git add -A
++git commit -m "feat: add support for WA/WB 2.26.12.xx + auto-update workflow"
++git push origin master
++```
++
++This push will trigger the **Android CI** workflow, which will:
++1. Build both WhatsApp and Business flavors
++2. Upload artifacts
++3. Create a GitHub Release with signed APKs
++
++---
++
++## How the Auto-Update works
++
++The **Auto-Update WhatsApp Versions** workflow runs daily at 06:00 UTC (08:00 SAST):
++
++1. Scrapes APKPure/Uptodown/WABetaInfo for the latest WhatsApp version
++2. Compares against currently supported versions in `arrays.xml`
++3. If new versions found → patches `arrays.xml`, commits, pushes
++4. The push triggers the Android CI workflow → builds + releases signed APKs
++
++You can also trigger it manually from: **Actions → Auto-Update WhatsApp Versions → Run workflow**
++
++The "Force build" option lets you rebuild even if no new version is detected.
++
++---
++
++## Important Notes
++
++- **Signing key**: All future builds will use this keystore. DON'T lose it — if you
++  re-sign with a different key, you'll need to uninstall + reinstall on device.
++- **DexKit compatibility**: Adding version strings only bypasses the version check.
++  If WhatsApp changes internal class structures, some features may break.
++  Error toasts in WhatsApp will tell you exactly which plugin/hook failed.
++- **GitHub Actions limits**: Free tier gets 2,000 minutes/month. Each build uses ~5-10 min.
++  Daily checks that find nothing use <1 min.
+diff --git a/app/src/main/java/com/wmods/wppenhacer/WppXposed.java b/app/src/main/java/com/wmods/wppenhacer/WppXposed.java
+index 9c1b4373..2675ac8a 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/WppXposed.java
++++ b/app/src/main/java/com/wmods/wppenhacer/WppXposed.java
+@@ -62,7 +62,7 @@ public class WppXposed implements IXposedHookLoadPackage, IXposedHookInitPackage
+         ScopeHook.hook(lpparam);
+ 
+         //  AndroidPermissions.hook(lpparam); in tests
+-        if ((packageName.equals(FeatureLoader.PACKAGE_WPP) && App.isOriginalPackage()) || packageName.equals(FeatureLoader.PACKAGE_BUSINESS)) {
++        if ((FeatureLoader.isWppOrClone(packageName) && App.isOriginalPackage()) || packageName.equals(FeatureLoader.PACKAGE_BUSINESS)) {
+             XposedBridge.log("[•] This package: " + lpparam.packageName);
+ 
+             // Load features
+@@ -76,7 +76,7 @@ public class WppXposed implements IXposedHookLoadPackage, IXposedHookInitPackage
+     public void handleInitPackageResources(XC_InitPackageResources.InitPackageResourcesParam resparam) throws Throwable {
+         var packageName = resparam.packageName;
+ 
+-        if (!packageName.equals(FeatureLoader.PACKAGE_WPP) && !packageName.equals(FeatureLoader.PACKAGE_BUSINESS))
++        if (!FeatureLoader.isWhatsAppPackage(packageName))
+             return;
+ 
+         XModuleResources modRes = XModuleResources.createInstance(MODULE_PATH, resparam.res);
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/AntiUpdater.java b/app/src/main/java/com/wmods/wppenhacer/xposed/AntiUpdater.java
+index f17b39f6..c0567237 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/AntiUpdater.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/AntiUpdater.java
+@@ -20,7 +20,7 @@ public class AntiUpdater {
+             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                 var session = (PackageInstaller.SessionParams) param.args[0];
+                 var packageName = XposedHelpers.getObjectField(session, "mPackageName");
+-                if (packageName.equals(FeatureLoader.PACKAGE_WPP) || packageName.equals(FeatureLoader.PACKAGE_BUSINESS)) {
++                if (FeatureLoader.isWhatsAppPackage((String) packageName)) {
+                     param.setThrowable(new IOException("UPDATE LOCKED BY WAENHANCER"));
+                 }
+             }
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/bridge/ScopeHook.java b/app/src/main/java/com/wmods/wppenhacer/xposed/bridge/ScopeHook.java
+index 1c65643c..b35957bd 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/bridge/ScopeHook.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/bridge/ScopeHook.java
+@@ -113,7 +113,7 @@ public class ScopeHook {
+                         if (callingApps == null) return;
+                         var targetApp = getPackageNameFromPackageSettings(param.args[3]);
+                         for (var caller : callingApps) {
+-                            if ((caller.equals(FeatureLoader.PACKAGE_WPP) || caller.equals(FeatureLoader.PACKAGE_BUSINESS)) && targetApp.equals(BuildConfig.APPLICATION_ID)) {
++                            if (FeatureLoader.isWhatsAppPackage(caller) && targetApp.equals(BuildConfig.APPLICATION_ID)) {
+                                 param.setResult(Boolean.FALSE);
+                                 return;
+                             }
+@@ -139,7 +139,7 @@ public class ScopeHook {
+                         if (callingApps == null) return;
+                         var targetApp = getPackageNameFromPackageSettings(param.args[2]);
+                         for (var caller : callingApps) {
+-                            if ((caller.equals(FeatureLoader.PACKAGE_WPP) || caller.equals(FeatureLoader.PACKAGE_BUSINESS)) && targetApp.equals(BuildConfig.APPLICATION_ID)) {
++                            if (FeatureLoader.isWhatsAppPackage(caller) && targetApp.equals(BuildConfig.APPLICATION_ID)) {
+                                 param.setResult(Boolean.FALSE);
+                                 return;
+                             }
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/core/FeatureLoader.java b/app/src/main/java/com/wmods/wppenhacer/xposed/core/FeatureLoader.java
+index a01280b4..c9200baf 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/core/FeatureLoader.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/core/FeatureLoader.java
+@@ -115,6 +115,26 @@ public class FeatureLoader {
+     public final static String PACKAGE_WPP = "com.whatsapp";
+     public final static String PACKAGE_BUSINESS = "com.whatsapp.w4b";
+ 
++    // Clone packages created by clone-factory.sh (com.whatsapp.clone1 through clone7)
++    public static final String CLONE_PREFIX = "com.whatsapp.clone";
++
++    /**
++     * Returns true if the given package is any WhatsApp variant we should hook:
++     * official com.whatsapp, business com.whatsapp.w4b, or any clone com.whatsapp.clone*
++     */
++    public static boolean isWhatsAppPackage(String packageName) {
++        return packageName.equals(PACKAGE_WPP)
++                || packageName.equals(PACKAGE_BUSINESS)
++                || packageName.startsWith(CLONE_PREFIX);
++    }
++
++    /**
++     * Returns true if the given package is the official WPP or a clone of it (not business).
++     */
++    public static boolean isWppOrClone(String packageName) {
++        return packageName.equals(PACKAGE_WPP) || packageName.startsWith(CLONE_PREFIX);
++    }
++
+     private static final ArrayList<ErrorItem> list = new ArrayList<>();
+     private static List<String> supportedVersions;
+     private static String currentVersion;
+@@ -146,7 +166,7 @@ public class FeatureLoader {
+                         XposedBridge.log(packageInfo.versionName);
+                         currentVersion = packageInfo.versionName;
+                         supportedVersions = Arrays.asList(mApp.getResources()
+-                                .getStringArray(Objects.equals(mApp.getPackageName(), FeatureLoader.PACKAGE_WPP)
++                                .getStringArray(FeatureLoader.isWppOrClone(mApp.getPackageName())
+                                         ? ResId.array.supported_versions_wpp
+                                         : ResId.array.supported_versions_business));
+                         mApp.registerActivityLifecycleCallbacks(new WaCallback());
+diff --git a/app/src/main/res/values/arrays.xml b/app/src/main/res/values/arrays.xml
+index 7dbf039f..b4d6e8b4 100644
+--- a/app/src/main/res/values/arrays.xml
++++ b/app/src/main/res/values/arrays.xml
+@@ -3,6 +3,13 @@
+     <string-array name="scope">
+         <item>com.whatsapp</item>
+         <item>com.whatsapp.w4b</item>
++        <item>com.whatsapp.clone1</item>
++        <item>com.whatsapp.clone2</item>
++        <item>com.whatsapp.clone3</item>
++        <item>com.whatsapp.clone4</item>
++        <item>com.whatsapp.clone5</item>
++        <item>com.whatsapp.clone6</item>
++        <item>com.whatsapp.clone7</item>
+         <item>android</item>
+     </string-array>
+ 
+@@ -158,12 +165,14 @@
+         <item>2.26.9.xx</item>
+         <item>2.26.10.xx</item>
+         <item>2.26.11.xx</item>
++        <item>2.26.12.xx</item>
+     </string-array>
+     <string-array name="supported_versions_business">
+         <item>2.26.8.xx</item>
+         <item>2.26.9.xx</item>
+         <item>2.26.10.xx</item>
+         <item>2.26.11.xx</item>
++        <item>2.26.12.xx</item>
+     </string-array>
+     <string-array name="image_picker">
+         <item>image/*</item>
+diff --git a/changelog.txt b/changelog.txt
+index 8c123c4c..96758c17 100644
+--- a/changelog.txt
++++ b/changelog.txt
+@@ -1,2 +1,3 @@
+ [ADDED]
+-* Added support for WA/WB 2.26.11.xx
++* Added support for WA/WB 2.26.12.xx
++* Added support for WhatsApp clones (com.whatsapp.clone1-7)
+-- 
+2.43.0
+
