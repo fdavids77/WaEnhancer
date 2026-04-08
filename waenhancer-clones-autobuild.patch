@@ -1,4 +1,4 @@
-From 37526ed81847cbfbb48ab77b6a44e3507cb4b57e Mon Sep 17 00:00:00 2001
+From 2b7487a16e03a3c2ed688f9d4abe402e757af59e Mon Sep 17 00:00:00 2001
 From: fdavids77 <fdavids77@users.noreply.github.com>
 Date: Wed, 8 Apr 2026 06:44:53 +0000
 Subject: [PATCH] feat: add WA 2.26.12.xx support, clone support (clone1-7),
@@ -13,15 +13,15 @@ Subject: [PATCH] feat: add WA 2.26.12.xx support, clone support (clone1-7),
 - Added AUTO-BUILD-SETUP.md with GitHub Secrets setup guide
 ---
  .github/workflows/android.yml                 |   7 +-
- .github/workflows/auto-update-versions.yml    | 168 ++++++++++++++++++
- AUTO-BUILD-SETUP.md                           |  68 +++++++
+ .github/workflows/auto-update-versions.yml    | 165 ++++++++++++++++++
+ AUTO-BUILD-SETUP.md                           |  68 ++++++++
  .../java/com/wmods/wppenhacer/WppXposed.java  |   4 +-
  .../wmods/wppenhacer/xposed/AntiUpdater.java  |   2 +-
  .../wppenhacer/xposed/bridge/ScopeHook.java   |   4 +-
  .../wppenhacer/xposed/core/FeatureLoader.java |  22 ++-
  app/src/main/res/values/arrays.xml            |   9 +
  changelog.txt                                 |   3 +-
- 9 files changed, 278 insertions(+), 9 deletions(-)
+ 9 files changed, 275 insertions(+), 9 deletions(-)
  create mode 100644 .github/workflows/auto-update-versions.yml
  create mode 100644 AUTO-BUILD-SETUP.md
 
@@ -52,16 +52,13 @@ index 8dc54a27..b3bb7acf 100644
        - name: set up JDK 17
 diff --git a/.github/workflows/auto-update-versions.yml b/.github/workflows/auto-update-versions.yml
 new file mode 100644
-index 00000000..95239bdd
+index 00000000..b7f52144
 --- /dev/null
 +++ b/.github/workflows/auto-update-versions.yml
-@@ -0,0 +1,168 @@
-+name: Auto-Update WhatsApp Versions
+@@ -0,0 +1,165 @@
++name: Check & Update WhatsApp Versions
 +
 +on:
-+  schedule:
-+    # Run daily at 06:00 UTC (08:00 SAST)
-+    - cron: '0 6 * * *'
 +  workflow_dispatch:
 +    inputs:
 +      force_build:
