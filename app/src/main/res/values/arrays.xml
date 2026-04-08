@@ -3,6 +3,13 @@
     <string-array name="scope">
         <item>com.whatsapp</item>
         <item>com.whatsapp.w4b</item>
+        <item>com.whatsapp.clone1</item>
+        <item>com.whatsapp.clone2</item>
+        <item>com.whatsapp.clone3</item>
+        <item>com.whatsapp.clone4</item>
+        <item>com.whatsapp.clone5</item>
+        <item>com.whatsapp.clone6</item>
+        <item>com.whatsapp.clone7</item>
         <item>android</item>
     </string-array>
 
@@ -158,12 +165,14 @@
         <item>2.26.9.xx</item>
         <item>2.26.10.xx</item>
         <item>2.26.11.xx</item>
+        <item>2.26.12.xx</item>
     </string-array>
     <string-array name="supported_versions_business">
         <item>2.26.8.xx</item>
         <item>2.26.9.xx</item>
         <item>2.26.10.xx</item>
         <item>2.26.11.xx</item>
+        <item>2.26.12.xx</item>
     </string-array>
     <string-array name="image_picker">
         <item>image/*</item>

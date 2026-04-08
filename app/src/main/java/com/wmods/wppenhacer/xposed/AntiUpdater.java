@@ -20,7 +20,7 @@ public class AntiUpdater {
             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                 var session = (PackageInstaller.SessionParams) param.args[0];
                 var packageName = XposedHelpers.getObjectField(session, "mPackageName");
-                if (packageName.equals(FeatureLoader.PACKAGE_WPP) || packageName.equals(FeatureLoader.PACKAGE_BUSINESS)) {
+                if (FeatureLoader.isWhatsAppPackage((String) packageName)) {
                     param.setThrowable(new IOException("UPDATE LOCKED BY WAENHANCER"));
                 }
             }

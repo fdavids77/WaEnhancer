@@ -113,7 +113,7 @@ public class ScopeHook {
                         if (callingApps == null) return;
                         var targetApp = getPackageNameFromPackageSettings(param.args[3]);
                         for (var caller : callingApps) {
-                            if ((caller.equals(FeatureLoader.PACKAGE_WPP) || caller.equals(FeatureLoader.PACKAGE_BUSINESS)) && targetApp.equals(BuildConfig.APPLICATION_ID)) {
+                            if (FeatureLoader.isWhatsAppPackage(caller) && targetApp.equals(BuildConfig.APPLICATION_ID)) {
                                 param.setResult(Boolean.FALSE);
                                 return;
                             }
@@ -139,7 +139,7 @@ public class ScopeHook {
                         if (callingApps == null) return;
                         var targetApp = getPackageNameFromPackageSettings(param.args[2]);
                         for (var caller : callingApps) {
-                            if ((caller.equals(FeatureLoader.PACKAGE_WPP) || caller.equals(FeatureLoader.PACKAGE_BUSINESS)) && targetApp.equals(BuildConfig.APPLICATION_ID)) {
+                            if (FeatureLoader.isWhatsAppPackage(caller) && targetApp.equals(BuildConfig.APPLICATION_ID)) {
                                 param.setResult(Boolean.FALSE);
                                 return;
                             }

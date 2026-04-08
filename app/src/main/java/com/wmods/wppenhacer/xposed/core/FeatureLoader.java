@@ -115,6 +115,26 @@ public class FeatureLoader {
     public final static String PACKAGE_WPP = "com.whatsapp";
     public final static String PACKAGE_BUSINESS = "com.whatsapp.w4b";
 
+    // Clone packages created by clone-factory.sh (com.whatsapp.clone1 through clone7)
+    public static final String CLONE_PREFIX = "com.whatsapp.clone";
+
+    /**
+     * Returns true if the given package is any WhatsApp variant we should hook:
+     * official com.whatsapp, business com.whatsapp.w4b, or any clone com.whatsapp.clone*
+     */
+    public static boolean isWhatsAppPackage(String packageName) {
+        return packageName.equals(PACKAGE_WPP)
+                || packageName.equals(PACKAGE_BUSINESS)
+                || packageName.startsWith(CLONE_PREFIX);
+    }
+
+    /**
+     * Returns true if the given package is the official WPP or a clone of it (not business).
+     */
+    public static boolean isWppOrClone(String packageName) {
+        return packageName.equals(PACKAGE_WPP) || packageName.startsWith(CLONE_PREFIX);
+    }
+
     private static final ArrayList<ErrorItem> list = new ArrayList<>();
     private static List<String> supportedVersions;
     private static String currentVersion;
@@ -146,7 +166,7 @@ public class FeatureLoader {
                         XposedBridge.log(packageInfo.versionName);
                         currentVersion = packageInfo.versionName;
                         supportedVersions = Arrays.asList(mApp.getResources()
-                                .getStringArray(Objects.equals(mApp.getPackageName(), FeatureLoader.PACKAGE_WPP)
+                                .getStringArray(FeatureLoader.isWppOrClone(mApp.getPackageName())
                                         ? ResId.array.supported_versions_wpp
                                         : ResId.array.supported_versions_business));
                         mApp.registerActivityLifecycleCallbacks(new WaCallback());
