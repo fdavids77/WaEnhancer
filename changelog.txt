@@ -1,3 +1,2 @@
 [ADDED]
-* Added support for WA/WB 2.26.12.xx
-* Added support for WhatsApp clones (com.whatsapp.clone1-7)
+* Added support for WA/WB 2.26.13.xx 2.26.14.xx (auto-update)
