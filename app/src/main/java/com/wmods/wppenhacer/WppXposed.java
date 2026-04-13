@@ -62,7 +62,7 @@ public class WppXposed implements IXposedHookLoadPackage, IXposedHookInitPackage
         ScopeHook.hook(lpparam);
 
         //  AndroidPermissions.hook(lpparam); in tests
-        if ((packageName.equals(FeatureLoader.PACKAGE_WPP) && App.isOriginalPackage()) || packageName.equals(FeatureLoader.PACKAGE_BUSINESS)) {
+        if ((FeatureLoader.isWppOrClone(packageName) && App.isOriginalPackage()) || packageName.equals(FeatureLoader.PACKAGE_BUSINESS)) {
             XposedBridge.log("[•] This package: " + lpparam.packageName);
 
             // Load features
@@ -76,7 +76,7 @@ public class WppXposed implements IXposedHookLoadPackage, IXposedHookInitPackage
     public void handleInitPackageResources(XC_InitPackageResources.InitPackageResourcesParam resparam) throws Throwable {
         var packageName = resparam.packageName;
 
-        if (!packageName.equals(FeatureLoader.PACKAGE_WPP) && !packageName.equals(FeatureLoader.PACKAGE_BUSINESS))
+        if (!FeatureLoader.isWhatsAppPackage(packageName))
             return;
 
         XModuleResources modRes = XModuleResources.createInstance(MODULE_PATH, resparam.res);
