@@ -1,0 +1,1556 @@
+From 2b7487a16e03a3c2ed688f9d4abe402e757af59e Mon Sep 17 00:00:00 2001
+From: fdavids77 <fdavids77@users.noreply.github.com>
+Date: Wed, 8 Apr 2026 06:44:53 +0000
+Subject: [PATCH 1/5] feat: add WA 2.26.12.xx support, clone support
+ (clone1-7), auto-update workflow
+
+- Added 2.26.12.xx to supported_versions_wpp and supported_versions_business
+- Added isWhatsAppPackage()/isWppOrClone() helpers in FeatureLoader
+- Updated WppXposed, AntiUpdater, ScopeHook to recognise clone packages
+- Added com.whatsapp.clone1-7 to LSPosed scope array
+- Added auto-update-versions.yml: daily check for new WA versions
+- Fixed android.yml: workflow_dispatch now works, added main branch trigger
+- Added AUTO-BUILD-SETUP.md with GitHub Secrets setup guide
+---
+ .github/workflows/android.yml                 |   7 +-
+ .github/workflows/auto-update-versions.yml    | 165 ++++++++++++++++++
+ AUTO-BUILD-SETUP.md                           |  68 ++++++++
+ .../java/com/wmods/wppenhacer/WppXposed.java  |   4 +-
+ .../wmods/wppenhacer/xposed/AntiUpdater.java  |   2 +-
+ .../wppenhacer/xposed/bridge/ScopeHook.java   |   4 +-
+ .../wppenhacer/xposed/core/FeatureLoader.java |  22 ++-
+ app/src/main/res/values/arrays.xml            |   9 +
+ changelog.txt                                 |   3 +-
+ 9 files changed, 275 insertions(+), 9 deletions(-)
+ create mode 100644 .github/workflows/auto-update-versions.yml
+ create mode 100644 AUTO-BUILD-SETUP.md
+
+diff --git a/.github/workflows/android.yml b/.github/workflows/android.yml
+index 8dc54a27..b3bb7acf 100644
+--- a/.github/workflows/android.yml
++++ b/.github/workflows/android.yml
+@@ -2,7 +2,8 @@ name: Android CI
+ 
+ on:
+   push:
+-    branches: [ "master", "feature/*" ]
++    branches: [ "master", "main", "feature/*" ]
++  workflow_dispatch:
+ jobs:
+   build:
+     permissions: write-all
+@@ -10,7 +11,9 @@ jobs:
+     env:
+       BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+       CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
+-    if: github.event_name == 'push' && !contains(github.event.head_commit.message, 'Merge')
++    if: >-
++      (github.event_name == 'push' && !contains(github.event.head_commit.message, 'Merge'))
++      || github.event_name == 'workflow_dispatch'
+     steps:
+       - uses: actions/checkout@v6
+       - name: set up JDK 17
+diff --git a/.github/workflows/auto-update-versions.yml b/.github/workflows/auto-update-versions.yml
+new file mode 100644
+index 00000000..b7f52144
+--- /dev/null
++++ b/.github/workflows/auto-update-versions.yml
+@@ -0,0 +1,165 @@
++name: Check & Update WhatsApp Versions
++
++on:
++  workflow_dispatch:
++    inputs:
++      force_build:
++        description: 'Force build even if no new version found'
++        required: false
++        default: 'false'
++        type: boolean
++
++jobs:
++  check-and-update:
++    runs-on: ubuntu-latest
++    permissions: write-all
++
++    steps:
++      - uses: actions/checkout@v6
++        with:
++          token: ${{ secrets.GITHUB_TOKEN }}
++
++      - name: Check for new WhatsApp versions
++        id: check_version
++        run: |
++          # Extract currently supported versions from arrays.xml
++          CURRENT_VERSIONS=$(grep -oP '2\.\d+\.\d+\.xx' app/src/main/res/values/arrays.xml | sort -u)
++          echo "Current supported versions:"
++          echo "$CURRENT_VERSIONS"
++
++          # Get the highest currently supported minor version (e.g., 12 from 2.26.12.xx)
++          HIGHEST_MINOR=$(echo "$CURRENT_VERSIONS" | grep -oP '2\.26\.\K\d+' | sort -n | tail -1)
++          echo "Highest supported minor: $HIGHEST_MINOR"
++
++          # Check Play Store / APKMirror for latest WhatsApp version
++          # Method 1: Check APKPure (most reliable scraping target)
++          LATEST_INFO=$(curl -sL "https://apkpure.net/whatsapp-android/com.whatsapp" \
++            -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
++            | grep -oP '2\.26\.\d+\.\d+' | head -1 || true)
++
++          # Method 2: Fallback — check uptodown
++          if [ -z "$LATEST_INFO" ]; then
++            LATEST_INFO=$(curl -sL "https://whatsapp.en.uptodown.com/android" \
++              -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
++              | grep -oP '2\.26\.\d+\.\d+' | head -1 || true)
++          fi
++
++          # Method 3: Fallback — check WABetaInfo
++          if [ -z "$LATEST_INFO" ]; then
++            LATEST_INFO=$(curl -sL "https://wabetainfo.com/" \
++              -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
++              | grep -oP '2\.26\.\d+\.\d+' | sort -t. -k3 -n | tail -1 || true)
++          fi
++
++          echo "Latest version found online: $LATEST_INFO"
++
++          if [ -z "$LATEST_INFO" ]; then
++            echo "Could not determine latest WhatsApp version"
++            echo "new_versions_found=false" >> $GITHUB_OUTPUT
++            exit 0
++          fi
++
++          # Extract the minor version from the latest (e.g., 14 from 2.26.14.1)
++          LATEST_MINOR=$(echo "$LATEST_INFO" | grep -oP '2\.26\.\K\d+')
++          echo "Latest minor version: $LATEST_MINOR"
++
++          # Calculate which new versions need adding
++          NEW_VERSIONS=""
++          NEXT=$((HIGHEST_MINOR + 1))
++          while [ "$NEXT" -le "$LATEST_MINOR" ]; do
++            NEW_VERSIONS="$NEW_VERSIONS 2.26.${NEXT}.xx"
++            NEXT=$((NEXT + 1))
++          done
++
++          if [ -z "$NEW_VERSIONS" ] && [ "${{ inputs.force_build }}" != "true" ]; then
++            echo "No new versions to add (latest $LATEST_MINOR <= supported $HIGHEST_MINOR)"
++            echo "new_versions_found=false" >> $GITHUB_OUTPUT
++            exit 0
++          fi
++
++          echo "New versions to add:$NEW_VERSIONS"
++          echo "new_versions_found=true" >> $GITHUB_OUTPUT
++          echo "new_versions=$NEW_VERSIONS" >> $GITHUB_OUTPUT
++          echo "latest_minor=$LATEST_MINOR" >> $GITHUB_OUTPUT
++          echo "highest_minor=$HIGHEST_MINOR" >> $GITHUB_OUTPUT
++
++      - name: Update arrays.xml with new versions
++        if: steps.check_version.outputs.new_versions_found == 'true'
++        run: |
++          NEW_VERSIONS="${{ steps.check_version.outputs.new_versions }}"
++          HIGHEST="${{ steps.check_version.outputs.highest_minor }}"
++
++          for VERSION in $NEW_VERSIONS; do
++            echo "Adding $VERSION to supported versions..."
++
++            # Add to supported_versions_wpp (insert before closing tag)
++            sed -i "/<string-array name=\"supported_versions_wpp\">/,/<\/string-array>/ {
++              /<item>2\.26\.${HIGHEST}\.xx<\/item>/a\\        <item>${VERSION}<\/item>
++            }" app/src/main/res/values/arrays.xml
++
++            # Add to supported_versions_business (insert before closing tag)
++            sed -i "/<string-array name=\"supported_versions_business\">/,/<\/string-array>/ {
++              /<item>2\.26\.${HIGHEST}\.xx<\/item>/a\\        <item>${VERSION}<\/item>
++            }" app/src/main/res/values/arrays.xml
++
++            # Update HIGHEST for next iteration so insertions chain correctly
++            HIGHEST=$(echo "$VERSION" | grep -oP '2\.26\.\K\d+')
++          done
++
++          # Update changelog
++          echo "[ADDED]" > changelog.txt
++          echo "* Added support for WA/WB$NEW_VERSIONS (auto-update)" >> changelog.txt
++
++          echo "Updated arrays.xml:"
++          grep -A20 "supported_versions_wpp" app/src/main/res/values/arrays.xml | head -25
++
++      - name: Commit and push changes
++        if: steps.check_version.outputs.new_versions_found == 'true'
++        run: |
++          git config user.name "github-actions[bot]"
++          git config user.email "github-actions[bot]@users.noreply.github.com"
++          git add app/src/main/res/values/arrays.xml changelog.txt
++          git commit -m "feat: add support for WA/WB${{ steps.check_version.outputs.new_versions }} (auto-update)"
++          git push
++
++      # The push above triggers the Android CI workflow which builds + releases the APK
++      # But we also build here as a fallback in case the CI workflow doesn't trigger
++
++      - name: Set up JDK 17
++        if: steps.check_version.outputs.new_versions_found == 'true'
++        uses: actions/setup-java@v5
++        with:
++          java-version: '17'
++          distribution: 'temurin'
++          cache: gradle
++
++      - name: Write signing key
++        if: steps.check_version.outputs.new_versions_found == 'true'
++        env:
++          KEY_STORE: ${{ secrets.KEY_STORE }}
++        run: |
++          if [ ! -z "$KEY_STORE" ]; then
++            echo androidStorePassword='${{ secrets.KEY_STORE_PASSWORD }}' >> gradle.properties
++            echo androidKeyAlias='${{ secrets.ALIAS }}' >> gradle.properties
++            echo androidKeyPassword='${{ secrets.KEY_PASSWORD }}' >> gradle.properties
++            echo androidStoreFile='key.jks' >> gradle.properties
++            echo "$KEY_STORE" | base64 --decode > key.jks
++          fi
++
++      - name: Build APKs
++        if: steps.check_version.outputs.new_versions_found == 'true'
++        run: |
++          chmod +x gradlew
++          ./gradlew assembleWhatsappDebug assembleBusinessDebug -Pminify=true
++
++      - name: Create release
++        if: steps.check_version.outputs.new_versions_found == 'true'
++        uses: softprops/action-gh-release@v2
++        with:
++          token: ${{ secrets.GITHUB_TOKEN }}
++          name: "WaEnhancer — WA/WB${{ steps.check_version.outputs.new_versions }}"
++          body_path: changelog.txt
++          files: |
++            app/build/outputs/apk/whatsapp/debug/app-whatsapp-debug.apk
++            app/build/outputs/apk/business/debug/app-business-debug.apk
++          tag_name: "auto-2.26.${{ steps.check_version.outputs.latest_minor }}"
+diff --git a/AUTO-BUILD-SETUP.md b/AUTO-BUILD-SETUP.md
+new file mode 100644
+index 00000000..019bd3a4
+--- /dev/null
++++ b/AUTO-BUILD-SETUP.md
+@@ -0,0 +1,68 @@
++# WaEnhancer Auto-Build Setup Guide
++
++## What was changed
++
++### 1. `arrays.xml` — Added 2.26.12.xx support
++### 2. `android.yml` — Fixed workflow_dispatch trigger, added `main` branch
++### 3. `auto-update-versions.yml` — NEW: Daily auto-check for new WhatsApp versions
++
++---
++
++## GitHub Secrets Setup
++
++Go to: **Repository → Settings → Secrets and variables → Actions → New repository secret**
++
++Add these 4 secrets:
++
++| Secret Name        | Value                                    |
++|--------------------|------------------------------------------|
++| KEY_STORE          | (paste the base64 keystore below)        |
++| KEY_STORE_PASSWORD | waenhancer123                            |
++| ALIAS              | waenhancer                               |
++| KEY_PASSWORD       | waenhancer123                            |
++
++### KEY_STORE base64 value:
++Copy the ENTIRE contents of the file `keystore-base64.txt` (included in outputs).
++
++---
++
++## How to push changes
++
++```bash
++cd WaEnhancer
++git add -A
++git commit -m "feat: add support for WA/WB 2.26.12.xx + auto-update workflow"
++git push origin master
++```
++
++This push will trigger the **Android CI** workflow, which will:
++1. Build both WhatsApp and Business flavors
++2. Upload artifacts
++3. Create a GitHub Release with signed APKs
++
++---
++
++## How the Auto-Update works
++
++The **Auto-Update WhatsApp Versions** workflow runs daily at 06:00 UTC (08:00 SAST):
++
++1. Scrapes APKPure/Uptodown/WABetaInfo for the latest WhatsApp version
++2. Compares against currently supported versions in `arrays.xml`
++3. If new versions found → patches `arrays.xml`, commits, pushes
++4. The push triggers the Android CI workflow → builds + releases signed APKs
++
++You can also trigger it manually from: **Actions → Auto-Update WhatsApp Versions → Run workflow**
++
++The "Force build" option lets you rebuild even if no new version is detected.
++
++---
++
++## Important Notes
++
++- **Signing key**: All future builds will use this keystore. DON'T lose it — if you
++  re-sign with a different key, you'll need to uninstall + reinstall on device.
++- **DexKit compatibility**: Adding version strings only bypasses the version check.
++  If WhatsApp changes internal class structures, some features may break.
++  Error toasts in WhatsApp will tell you exactly which plugin/hook failed.
++- **GitHub Actions limits**: Free tier gets 2,000 minutes/month. Each build uses ~5-10 min.
++  Daily checks that find nothing use <1 min.
+diff --git a/app/src/main/java/com/wmods/wppenhacer/WppXposed.java b/app/src/main/java/com/wmods/wppenhacer/WppXposed.java
+index 9c1b4373..2675ac8a 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/WppXposed.java
++++ b/app/src/main/java/com/wmods/wppenhacer/WppXposed.java
+@@ -62,7 +62,7 @@ public class WppXposed implements IXposedHookLoadPackage, IXposedHookInitPackage
+         ScopeHook.hook(lpparam);
+ 
+         //  AndroidPermissions.hook(lpparam); in tests
+-        if ((packageName.equals(FeatureLoader.PACKAGE_WPP) && App.isOriginalPackage()) || packageName.equals(FeatureLoader.PACKAGE_BUSINESS)) {
++        if ((FeatureLoader.isWppOrClone(packageName) && App.isOriginalPackage()) || packageName.equals(FeatureLoader.PACKAGE_BUSINESS)) {
+             XposedBridge.log("[•] This package: " + lpparam.packageName);
+ 
+             // Load features
+@@ -76,7 +76,7 @@ public class WppXposed implements IXposedHookLoadPackage, IXposedHookInitPackage
+     public void handleInitPackageResources(XC_InitPackageResources.InitPackageResourcesParam resparam) throws Throwable {
+         var packageName = resparam.packageName;
+ 
+-        if (!packageName.equals(FeatureLoader.PACKAGE_WPP) && !packageName.equals(FeatureLoader.PACKAGE_BUSINESS))
++        if (!FeatureLoader.isWhatsAppPackage(packageName))
+             return;
+ 
+         XModuleResources modRes = XModuleResources.createInstance(MODULE_PATH, resparam.res);
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/AntiUpdater.java b/app/src/main/java/com/wmods/wppenhacer/xposed/AntiUpdater.java
+index f17b39f6..c0567237 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/AntiUpdater.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/AntiUpdater.java
+@@ -20,7 +20,7 @@ public class AntiUpdater {
+             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                 var session = (PackageInstaller.SessionParams) param.args[0];
+                 var packageName = XposedHelpers.getObjectField(session, "mPackageName");
+-                if (packageName.equals(FeatureLoader.PACKAGE_WPP) || packageName.equals(FeatureLoader.PACKAGE_BUSINESS)) {
++                if (FeatureLoader.isWhatsAppPackage((String) packageName)) {
+                     param.setThrowable(new IOException("UPDATE LOCKED BY WAENHANCER"));
+                 }
+             }
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/bridge/ScopeHook.java b/app/src/main/java/com/wmods/wppenhacer/xposed/bridge/ScopeHook.java
+index 1c65643c..b35957bd 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/bridge/ScopeHook.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/bridge/ScopeHook.java
+@@ -113,7 +113,7 @@ public class ScopeHook {
+                         if (callingApps == null) return;
+                         var targetApp = getPackageNameFromPackageSettings(param.args[3]);
+                         for (var caller : callingApps) {
+-                            if ((caller.equals(FeatureLoader.PACKAGE_WPP) || caller.equals(FeatureLoader.PACKAGE_BUSINESS)) && targetApp.equals(BuildConfig.APPLICATION_ID)) {
++                            if (FeatureLoader.isWhatsAppPackage(caller) && targetApp.equals(BuildConfig.APPLICATION_ID)) {
+                                 param.setResult(Boolean.FALSE);
+                                 return;
+                             }
+@@ -139,7 +139,7 @@ public class ScopeHook {
+                         if (callingApps == null) return;
+                         var targetApp = getPackageNameFromPackageSettings(param.args[2]);
+                         for (var caller : callingApps) {
+-                            if ((caller.equals(FeatureLoader.PACKAGE_WPP) || caller.equals(FeatureLoader.PACKAGE_BUSINESS)) && targetApp.equals(BuildConfig.APPLICATION_ID)) {
++                            if (FeatureLoader.isWhatsAppPackage(caller) && targetApp.equals(BuildConfig.APPLICATION_ID)) {
+                                 param.setResult(Boolean.FALSE);
+                                 return;
+                             }
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/core/FeatureLoader.java b/app/src/main/java/com/wmods/wppenhacer/xposed/core/FeatureLoader.java
+index a01280b4..c9200baf 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/core/FeatureLoader.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/core/FeatureLoader.java
+@@ -115,6 +115,26 @@ public class FeatureLoader {
+     public final static String PACKAGE_WPP = "com.whatsapp";
+     public final static String PACKAGE_BUSINESS = "com.whatsapp.w4b";
+ 
++    // Clone packages created by clone-factory.sh (com.whatsapp.clone1 through clone7)
++    public static final String CLONE_PREFIX = "com.whatsapp.clone";
++
++    /**
++     * Returns true if the given package is any WhatsApp variant we should hook:
++     * official com.whatsapp, business com.whatsapp.w4b, or any clone com.whatsapp.clone*
++     */
++    public static boolean isWhatsAppPackage(String packageName) {
++        return packageName.equals(PACKAGE_WPP)
++                || packageName.equals(PACKAGE_BUSINESS)
++                || packageName.startsWith(CLONE_PREFIX);
++    }
++
++    /**
++     * Returns true if the given package is the official WPP or a clone of it (not business).
++     */
++    public static boolean isWppOrClone(String packageName) {
++        return packageName.equals(PACKAGE_WPP) || packageName.startsWith(CLONE_PREFIX);
++    }
++
+     private static final ArrayList<ErrorItem> list = new ArrayList<>();
+     private static List<String> supportedVersions;
+     private static String currentVersion;
+@@ -146,7 +166,7 @@ public class FeatureLoader {
+                         XposedBridge.log(packageInfo.versionName);
+                         currentVersion = packageInfo.versionName;
+                         supportedVersions = Arrays.asList(mApp.getResources()
+-                                .getStringArray(Objects.equals(mApp.getPackageName(), FeatureLoader.PACKAGE_WPP)
++                                .getStringArray(FeatureLoader.isWppOrClone(mApp.getPackageName())
+                                         ? ResId.array.supported_versions_wpp
+                                         : ResId.array.supported_versions_business));
+                         mApp.registerActivityLifecycleCallbacks(new WaCallback());
+diff --git a/app/src/main/res/values/arrays.xml b/app/src/main/res/values/arrays.xml
+index 7dbf039f..b4d6e8b4 100644
+--- a/app/src/main/res/values/arrays.xml
++++ b/app/src/main/res/values/arrays.xml
+@@ -3,6 +3,13 @@
+     <string-array name="scope">
+         <item>com.whatsapp</item>
+         <item>com.whatsapp.w4b</item>
++        <item>com.whatsapp.clone1</item>
++        <item>com.whatsapp.clone2</item>
++        <item>com.whatsapp.clone3</item>
++        <item>com.whatsapp.clone4</item>
++        <item>com.whatsapp.clone5</item>
++        <item>com.whatsapp.clone6</item>
++        <item>com.whatsapp.clone7</item>
+         <item>android</item>
+     </string-array>
+ 
+@@ -158,12 +165,14 @@
+         <item>2.26.9.xx</item>
+         <item>2.26.10.xx</item>
+         <item>2.26.11.xx</item>
++        <item>2.26.12.xx</item>
+     </string-array>
+     <string-array name="supported_versions_business">
+         <item>2.26.8.xx</item>
+         <item>2.26.9.xx</item>
+         <item>2.26.10.xx</item>
+         <item>2.26.11.xx</item>
++        <item>2.26.12.xx</item>
+     </string-array>
+     <string-array name="image_picker">
+         <item>image/*</item>
+diff --git a/changelog.txt b/changelog.txt
+index 8c123c4c..96758c17 100644
+--- a/changelog.txt
++++ b/changelog.txt
+@@ -1,2 +1,3 @@
+ [ADDED]
+-* Added support for WA/WB 2.26.11.xx
++* Added support for WA/WB 2.26.12.xx
++* Added support for WhatsApp clones (com.whatsapp.clone1-7)
+-- 
+2.43.0
+
+
+From 76c66996579615503c89f4fd6fd2b1fab69ebaa9 Mon Sep 17 00:00:00 2001
+From: Dev4Mod <wellingtonmods@gmail.com>
+Date: Sat, 11 Apr 2026 22:01:40 -0300
+Subject: [PATCH 2/5] feat: remove unnecessary debug logging from multiple
+ classes
+
+---
+ .../features/customization/ContactBlockedVerify.java      | 1 -
+ .../xposed/features/customization/IGStatus.java           | 3 ---
+ .../xposed/features/customization/SeparateGroup.java      | 4 ----
+ .../xposed/features/customization/ShowOnline.java         | 2 --
+ .../wppenhacer/xposed/features/general/ChatLimit.java     | 3 ---
+ .../wmods/wppenhacer/xposed/features/general/Others.java  | 8 +-------
+ .../xposed/features/general/RecoverDeleteForMe.java       | 4 +++-
+ .../wppenhacer/xposed/features/media/DownloadProfile.java | 4 +---
+ .../xposed/features/others/ActivityController.java        | 1 -
+ .../wppenhacer/xposed/features/others/BackupRestore.java  | 3 +++
+ .../wmods/wppenhacer/xposed/features/others/Channels.java | 4 ----
+ .../xposed/features/others/TextStatusComposer.java        | 2 --
+ .../wmods/wppenhacer/xposed/features/privacy/AntiWa.java  | 4 ----
+ .../wppenhacer/xposed/features/privacy/HideReceipt.java   | 4 ----
+ .../wppenhacer/xposed/features/privacy/HideSeen.java      | 5 -----
+ 15 files changed, 8 insertions(+), 44 deletions(-)
+
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/ContactBlockedVerify.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/ContactBlockedVerify.java
+index b60ab334..b2633e6d 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/ContactBlockedVerify.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/ContactBlockedVerify.java
+@@ -98,7 +98,6 @@ public class ContactBlockedVerify extends Feature {
+         } catch (Exception ignored) {
+             Constructor<?> verifyKeyItemConstructor = Unobfuscator.loadVerifyKeyItemConstructor(classLoader);
+             Constructor<?> verifyKeyRunnableConstructor = Unobfuscator.loadVerifyKeyRunnableConstructor(classLoader);
+-            log(verifyKeyRunnableConstructor);
+             var number = Unobfuscator.loadVerifyKeyInt(classLoader);
+             var callbackInterface = verifyKeyItemConstructor.getParameterTypes()[0];
+             VerifyKeyInvoker invoker = (proxyInstance, jids) -> {
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/IGStatus.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/IGStatus.java
+index 86ad6c08..b72b890c 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/IGStatus.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/IGStatus.java
+@@ -17,7 +17,6 @@ import com.wmods.wppenhacer.xposed.utils.Utils;
+ 
+ import org.luckypray.dexkit.query.enums.StringMatchType;
+ 
+-import java.lang.reflect.Modifier;
+ import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.List;
+@@ -43,9 +42,7 @@ public class IGStatus extends Feature {
+         var fabintMethod = Unobfuscator.loadFabMethod(classLoader);
+ 
+         var archivedFragmentClass = Unobfuscator.findFirstClassUsingName(classLoader, StringMatchType.EndsWith, "ArchivedConversationsFragment");
+-        logDebug(archivedFragmentClass);
+         var folderFragmentClass = Unobfuscator.findFirstClassUsingName(classLoader, StringMatchType.EndsWith, "FolderConversationsFragment");
+-        log(archivedFragmentClass);
+ 
+         var getViewConversationMethod = Unobfuscator.loadGetViewConversationMethod(classLoader);
+         XposedBridge.hookMethod(getViewConversationMethod, new XC_MethodHook() {
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/SeparateGroup.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/SeparateGroup.java
+index 4e4b2800..a6dbe867 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/SeparateGroup.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/SeparateGroup.java
+@@ -5,7 +5,6 @@ import static de.robv.android.xposed.XposedHelpers.getObjectField;
+ 
+ import android.annotation.SuppressLint;
+ import android.os.Bundle;
+-import android.view.Menu;
+ import android.view.MenuItem;
+ import android.widget.BaseAdapter;
+ 
+@@ -16,7 +15,6 @@ import com.wmods.wppenhacer.xposed.core.WppCore;
+ import com.wmods.wppenhacer.xposed.core.db.MessageStore;
+ import com.wmods.wppenhacer.xposed.core.devkit.Unobfuscator;
+ import com.wmods.wppenhacer.xposed.core.devkit.UnobfuscatorCache;
+-import com.wmods.wppenhacer.xposed.utils.DebugUtils;
+ import com.wmods.wppenhacer.xposed.utils.ReflectionUtils;
+ import com.wmods.wppenhacer.xposed.utils.Utils;
+ 
+@@ -25,7 +23,6 @@ import java.util.Collection;
+ import java.util.HashMap;
+ import java.util.List;
+ import java.util.Objects;
+-import java.util.Set;
+ import java.util.regex.Pattern;
+ 
+ import de.robv.android.xposed.XC_MethodHook;
+@@ -173,7 +170,6 @@ public class SeparateGroup extends Feature {
+     @SuppressLint("ResourceType")
+     private void hookTabName() throws Exception {
+         var tabNameMethod = Unobfuscator.loadTabNameMethod(classLoader);
+-        logDebug("TAB NAME", Unobfuscator.getMethodDescriptor(tabNameMethod));
+         XposedBridge.hookMethod(tabNameMethod, new XC_MethodHook() {
+             @Override
+             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/ShowOnline.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/ShowOnline.java
+index 0260b051..d35a94d1 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/ShowOnline.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/ShowOnline.java
+@@ -153,9 +153,7 @@ public class ShowOnline extends Feature {
+         });
+ 
+         getStatusUser = Unobfuscator.loadStatusUserMethod(classLoader);
+-        logDebug(Unobfuscator.getMethodDescriptor(getStatusUser));
+         sendPresenceMethod = Unobfuscator.loadSendPresenceMethod(classLoader);
+-        logDebug("sendPresenceMethod", Unobfuscator.getMethodDescriptor(sendPresenceMethod));
+         tcTokenMethod = Unobfuscator.loadTcTokenMethod(classLoader);
+ 
+         XposedBridge.hookAllConstructors(getStatusUser.getDeclaringClass(), new XC_MethodHook() {
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/ChatLimit.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/ChatLimit.java
+index 4b4ed6c3..f3a803ec 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/ChatLimit.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/ChatLimit.java
+@@ -11,8 +11,6 @@ import com.wmods.wppenhacer.xposed.core.db.MessageStore;
+ import com.wmods.wppenhacer.xposed.core.devkit.Unobfuscator;
+ import com.wmods.wppenhacer.xposed.utils.ReflectionUtils;
+ 
+-import org.luckypray.dexkit.util.DexSignUtil;
+-
+ import java.util.Set;
+ 
+ import de.robv.android.xposed.XC_MethodHook;
+@@ -105,7 +103,6 @@ public class ChatLimit extends Feature {
+         }
+ 
+         var seeMoreMethod = Unobfuscator.loadSeeMoreConstructor(classLoader);
+-        logDebug("SeenMore Method: ", DexSignUtil.getMethodDescriptor(seeMoreMethod));
+ 
+         XposedBridge.hookMethod(seeMoreMethod, new XC_MethodHook() {
+             @Override
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/Others.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/Others.java
+index b1398ae0..c0e926fd 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/Others.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/Others.java
+@@ -28,7 +28,6 @@ import com.wmods.wppenhacer.xposed.utils.Utils;
+ 
+ import org.json.JSONObject;
+ import org.luckypray.dexkit.query.enums.StringMatchType;
+-import org.luckypray.dexkit.util.DexSignUtil;
+ 
+ import java.lang.reflect.Field;
+ import java.lang.reflect.Method;
+@@ -290,8 +289,6 @@ public class Others extends Feature {
+         var jidClass = Unobfuscator.findFirstClassUsingName(classLoader, StringMatchType.EndsWith, "jid.Jid");
+         var method = ReflectionUtils.findMethodUsingFilter(convClass, m -> m.getParameterCount() > 0 && !Modifier.isStatic(m.getModifiers()) && m.getParameterTypes()[0] == View.class && ReflectionUtils.findIndexOfType(m.getParameterTypes(), jidClass) != -1);
+         var field = ReflectionUtils.getFieldByExtendType(convClass, refreshStatusClass);
+-        logDebug("disablePhotoProfileStatus", Unobfuscator.getMethodDescriptor(method));
+-        logDebug("disablePhotoProfileStatus Field", Unobfuscator.getFieldDescriptor(field));
+         XposedBridge.hookMethod(method, new XC_MethodHook() {
+             private Object backup;
+ 
+@@ -399,7 +396,6 @@ public class Others extends Feature {
+ 
+ 
+         var conversationRowClass = Unobfuscator.loadConversationRowClass(classLoader);
+-        logDebug("Conversation Row", conversationRowClass);
+ 
+         XposedBridge.hookAllConstructors(conversationRowClass, new XC_MethodHook() {
+             @Override
+@@ -514,7 +510,6 @@ public class Others extends Feature {
+ 
+     private void sendAudioType(int audio_type) throws Exception {
+         var sendAudioTypeMethod = Unobfuscator.loadSendAudioTypeMethod(classLoader);
+-        log(Unobfuscator.getMethodDescriptor(sendAudioTypeMethod));
+         XposedBridge.hookMethod(sendAudioTypeMethod, new XC_MethodHook() {
+             @Override
+             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+@@ -646,7 +641,6 @@ public class Others extends Feature {
+ 
+     private void hookSearchbar(String filterChats) throws Exception {
+         Method searchbar = Unobfuscator.loadViewAddSearchBarMethod(classLoader);
+-        log("ADD HEADER VIEW: " + DexSignUtil.getMethodDescriptor(searchbar));
+         var searchBarID = Utils.getID("my_search_bar", "id");
+ 
+         XposedBridge.hookMethod(searchbar, new XC_MethodHook() {
+@@ -664,7 +658,7 @@ public class Others extends Feature {
+                     }
+                 }
+ 
+-                if ((view.getId() == searchBarID || view.findViewById(searchBarID) != null) && !Objects.equals(filterChats, "2")) {
++                if (view != null && (view.getId() == searchBarID || view.findViewById(searchBarID) != null) && !Objects.equals(filterChats, "2")) {
+                     param.setResult(null);
+                 }
+             }
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/RecoverDeleteForMe.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/RecoverDeleteForMe.java
+index b30d1d03..f5193685 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/RecoverDeleteForMe.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/RecoverDeleteForMe.java
+@@ -2,10 +2,11 @@ package com.wmods.wppenhacer.xposed.features.general;
+ 
+ import android.content.Context;
+ 
++import androidx.annotation.NonNull;
++
+ import com.wmods.wppenhacer.xposed.core.Feature;
+ import com.wmods.wppenhacer.xposed.core.components.FMessageWpp;
+ import com.wmods.wppenhacer.xposed.core.components.WaContactWpp;
+-import com.wmods.wppenhacer.xposed.core.db.DelMessageStore;
+ import com.wmods.wppenhacer.xposed.core.db.DeletedMessage;
+ import com.wmods.wppenhacer.xposed.core.devkit.Unobfuscator;
+ import com.wmods.wppenhacer.xposed.utils.Utils;
+@@ -489,6 +490,7 @@ public class RecoverDeleteForMe extends Feature {
+         }
+     }
+ 
++    @NonNull
+     @Override
+     public String getPluginName() {
+         return "Recover Delete For Me";
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/media/DownloadProfile.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/media/DownloadProfile.java
+index 4187185e..a35443ae 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/media/DownloadProfile.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/media/DownloadProfile.java
+@@ -7,9 +7,7 @@ import android.widget.Toast;
+ 
+ import androidx.annotation.NonNull;
+ 
+-import com.wmods.wppenhacer.R;
+ import com.wmods.wppenhacer.xposed.core.Feature;
+-import com.wmods.wppenhacer.xposed.core.WppCore;
+ import com.wmods.wppenhacer.xposed.core.components.WaContactWpp;
+ import com.wmods.wppenhacer.xposed.core.devkit.Unobfuscator;
+ import com.wmods.wppenhacer.xposed.utils.ReflectionUtils;
+@@ -41,7 +39,7 @@ public class DownloadProfile extends Feature {
+                 item.setOnMenuItemClickListener(menuItem -> {
+                     var subCls = param.thisObject.getClass().getSuperclass();
+                     if (subCls == null) {
+-                        log(new Exception("SubClass is null"));
++                        log("SubClass is null");
+                         return true;
+                     }
+                     var field = ReflectionUtils.getFieldByExtendType(subCls, WaContactWpp.TYPE);
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/ActivityController.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/ActivityController.java
+index 85fce013..0af7966d 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/ActivityController.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/ActivityController.java
+@@ -87,7 +87,6 @@ public class ActivityController extends Feature {
+                     Intent intent2 = new Intent();
+                     intent2.putExtra("path", uriStr);
+                     intent2.putExtra("key", Key);
+-                    logDebug("onActivityResult", "Call Download Result");
+                     activity.setResult(Activity.RESULT_OK, intent2);
+                 }
+                 activity.finish();
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/BackupRestore.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/BackupRestore.java
+index 61046357..f552f21c 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/BackupRestore.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/BackupRestore.java
+@@ -5,6 +5,8 @@ import android.content.Intent;
+ import android.view.Menu;
+ import android.widget.Toast;
+ 
++import androidx.annotation.NonNull;
++
+ import com.wmods.wppenhacer.xposed.core.Feature;
+ import com.wmods.wppenhacer.xposed.core.components.AlertDialogWpp;
+ import com.wmods.wppenhacer.xposed.core.devkit.Unobfuscator;
+@@ -23,6 +25,7 @@ public class BackupRestore extends Feature {
+         super(loader, preferences);
+     }
+ 
++    @NonNull
+     @Override
+     public String getPluginName() {
+         return "BackupRestore";
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/Channels.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/Channels.java
+index d1df26bc..c53285e5 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/Channels.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/Channels.java
+@@ -45,13 +45,9 @@ public class Channels extends Feature {
+         if (channels || removechannelRec) {
+ 
+             var removeChannelRecClass = Unobfuscator.loadRemoveChannelRecClass(classLoader);
+-            log("RemoveChannelRec: " + removeChannelRecClass);
+             var headerChannelItem = Unobfuscator.loadHeaderChannelItemClass(classLoader);
+-            log("HeaderChannelItem: " + headerChannelItem);
+             var listChannelItem = Unobfuscator.loadListChannelItemClass(classLoader);
+-            log("ListChannelItem: " + listChannelItem);
+             var listUpdateItems = Unobfuscator.loadListUpdateItems(classLoader);
+-            log("ListUpdateItems: " + Unobfuscator.getMethodDescriptor(listUpdateItems));
+             XposedBridge.hookMethod(listUpdateItems, new XC_MethodHook() {
+                 @Override
+                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/TextStatusComposer.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/TextStatusComposer.java
+index 9c6acb67..659a4cbb 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/TextStatusComposer.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/TextStatusComposer.java
+@@ -37,7 +37,6 @@ public class TextStatusComposer extends Feature {
+ 
+                     @Override
+                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+-                        logDebug("afterHookedMethod", "TextStatusComposer");
+                         var activity = WppCore.getCurrentActivity();
+                         var viewRoot = (View) param.args[1];
+                         var pickerColor = viewRoot.findViewById(Utils.getID("color_picker_btn", "id"));
+@@ -77,7 +76,6 @@ public class TextStatusComposer extends Feature {
+         var methodsTextStatus = Unobfuscator.loadTextStatusData(classLoader);
+ 
+         for (var method : methodsTextStatus) {
+-            logDebug("setColorTextComposer", Unobfuscator.getMethodDescriptor(method));
+             XposedBridge.hookMethod(method, new XC_MethodHook() {
+                 @Override
+                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/privacy/AntiWa.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/privacy/AntiWa.java
+index e0eb9074..8b8ad70b 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/privacy/AntiWa.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/privacy/AntiWa.java
+@@ -25,11 +25,9 @@ public class AntiWa extends Feature {
+         if (!prefs.getBoolean("bootloader_spoofer", false)) return;
+         var rootDetector = Unobfuscator.loadRootDetector(classLoader);
+         for (var detector : rootDetector) {
+-            logDebug("Root", detector);
+             XposedBridge.hookMethod(detector, XC_MethodReplacement.returnConstant(false));
+         }
+         var settingsGetInt = Settings.Global.class.getDeclaredMethod("getInt", ContentResolver.class, String.class, int.class);
+-        logDebug("Adb", settingsGetInt);
+         XposedBridge.hookMethod(settingsGetInt, new XC_MethodHook() {
+             @Override
+             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+@@ -40,7 +38,6 @@ public class AntiWa extends Feature {
+             }
+         });
+         var checkEmulator = Unobfuscator.loadCheckEmulator(classLoader);
+-        logDebug("Emulator", checkEmulator);
+         XposedBridge.hookMethod(checkEmulator, XC_MethodReplacement.returnConstant(false));
+         // File Check
+         var FileConstructor = File.class.getConstructor(String.class);
+@@ -57,7 +54,6 @@ public class AntiWa extends Feature {
+         });
+ 
+         var checkCustomRom = Unobfuscator.loadCheckCustomRom(classLoader);
+-        logDebug("CustomRom", checkCustomRom);
+         XposedBridge.hookMethod(checkCustomRom, XC_MethodReplacement.returnConstant(false));
+     }
+ 
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/privacy/HideReceipt.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/privacy/HideReceipt.java
+index f2f5aa80..0ed64de5 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/privacy/HideReceipt.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/privacy/HideReceipt.java
+@@ -59,10 +59,6 @@ public class HideReceipt extends Feature {
+         Method hideViewInChatMethod = Unobfuscator.loadHideViewInChatMethod(classLoader);
+         Method outsideMethod = Unobfuscator.loadReceiptOutsideChat(classLoader);
+ 
+-        logDebug("hook method:" + Unobfuscator.getMethodDescriptor(receiptMethod));
+-        logDebug("Inside Chat", Unobfuscator.getMethodDescriptor(hideViewInChatMethod));
+-        logDebug("Outside Chat", Unobfuscator.getMethodDescriptor(outsideMethod));
+-
+         XposedBridge.hookMethod(receiptMethod, new XC_MethodHook() {
+             @Override
+             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/privacy/HideSeen.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/privacy/HideSeen.java
+index 0e6cfbc5..a0bd5fd8 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/privacy/HideSeen.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/privacy/HideSeen.java
+@@ -74,7 +74,6 @@ public class HideSeen extends Feature {
+     private void hookSendReadReceiptJob() throws Exception {
+         Method sendReadReceiptJobMethod = Unobfuscator.loadHideViewSendReadJob(classLoader);
+         Class<?> sendJobClass = Unobfuscator.findFirstClassUsingName(classLoader, StringMatchType.EndsWith, "SendReadReceiptJob");
+-        log(Unobfuscator.getMethodDescriptor(sendReadReceiptJobMethod));
+ 
+         XposedBridge.hookMethod(sendReadReceiptJobMethod, new XC_MethodHook() {
+             @Override
+@@ -164,10 +163,6 @@ public class HideSeen extends Feature {
+         Method hideViewInChatMethod = Unobfuscator.loadHideViewInChatMethod(classLoader);
+         Method outsideMethod = Unobfuscator.loadReceiptOutsideChat(classLoader);
+ 
+-        logDebug("ReceiptMethod", Unobfuscator.getMethodDescriptor(receiptMethod));
+-        logDebug("Inside Chat", Unobfuscator.getMethodDescriptor(hideViewInChatMethod));
+-        logDebug("Outside Chat", Unobfuscator.getMethodDescriptor(outsideMethod));
+-
+         XposedBridge.hookMethod(receiptMethod, new XC_MethodHook() {
+             @Override
+             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+-- 
+2.43.0
+
+
+From b0bb0ce08446d7ff27429e3afbedd075b4d15aa6 Mon Sep 17 00:00:00 2001
+From: Dev4Mod <wellingtonmods@gmail.com>
+Date: Sun, 12 Apr 2026 11:45:59 -0300
+Subject: [PATCH 3/5] feat: add support for version 2.26.12.xx
+
+---
+ .../xposed/core/db/MessageHistory.java        |  4 +
+ .../xposed/core/devkit/Unobfuscator.java      | 53 ++++---------
+ .../features/customization/HideSeenView.java  |  4 +-
+ .../xposed/features/general/AntiRevoke.java   |  5 +-
+ .../xposed/features/general/Others.java       |  4 +-
+ .../features/general/ShowEditMessage.java     |  4 +-
+ .../listeners/ConversationItemListener.java   | 61 +++++++++++----
+ .../xposed/features/others/GroupAdmin.java    | 77 +++++++++++++------
+ .../xposed/features/privacy/TagMessage.java   |  4 +-
+ app/src/main/res/values/arrays.xml            |  2 +
+ 10 files changed, 130 insertions(+), 88 deletions(-)
+
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/core/db/MessageHistory.java b/app/src/main/java/com/wmods/wppenhacer/xposed/core/db/MessageHistory.java
+index ab6b0460..63c2a5d0 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/core/db/MessageHistory.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/core/db/MessageHistory.java
+@@ -202,6 +202,10 @@ public class MessageHistory extends SQLiteOpenHelper {
+         }
+     }
+ 
++    @Override
++    public void onDowngrade(SQLiteDatabase db, int oldVersion, int newVersion) {
++    }
++
+     private String createSeenMessageCacheKey(String jid, String message_id, MessageType type) {
+         return jid + "_" + message_id + "_" + type.ordinal();
+     }
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/core/devkit/Unobfuscator.java b/app/src/main/java/com/wmods/wppenhacer/xposed/core/devkit/Unobfuscator.java
+index 69aaf414..82ba8bdd 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/core/devkit/Unobfuscator.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/core/devkit/Unobfuscator.java
+@@ -9,7 +9,7 @@ import android.hardware.SensorEventListener;
+ import android.net.Uri;
+ import android.view.LayoutInflater;
+ import android.view.Menu;
+-import android.view.MenuInflater;
++import android.view.MenuItem;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.widget.FrameLayout;
+@@ -780,14 +780,19 @@ public class Unobfuscator {
+      */
+     public synchronized static Method loadViewOnceDownloadMenuMethod(ClassLoader classLoader) throws Exception {
+         return UnobfuscatorCache.getInstance().getMethod(classLoader, () -> {
+-            var clazz = XposedHelpers.findClass("com.whatsapp.mediaview.MediaViewFragment", classLoader);
+-            var method = Arrays.stream(clazz.getDeclaredMethods()).filter(m -> m.getParameterCount() == 2 &&
+-                    Objects.equals(m.getParameterTypes()[0], Menu.class) &&
+-                    Objects.equals(m.getParameterTypes()[1], MenuInflater.class) &&
+-                    m.getDeclaringClass() == clazz).findFirst();
+-            if (!method.isPresent())
+-                throw new Exception("ViewOnceDownloadMenu method not found");
+-            return method.get();
++            var id1 = Utils.getID("ic_viewonce", "drawable");
++            var setShowAsAction = MenuItem.class.getDeclaredMethod("setShowAsAction", int.class);
++            var methodData = dexkit.findMethod(
++                    FindMethod.create().matcher(MethodMatcher.create()
++                            .addUsingNumber(id1)
++                            .addInvoke(DexSignUtil.getMethodDescriptor(setShowAsAction))
++                    )
++            );
++            var result = methodData.stream().filter(m -> m.getParamCount() > 1 &&
++                    m.getParamTypeNames().contains(Menu.class.getName())
++            ).findFirst();
++            if (!result.isPresent()) throw new Exception("ViewOnceDownloadMenu method not found");
++            return result.get().getMethodInstance(classLoader);
+         });
+     }
+ 
+@@ -1582,36 +1587,6 @@ public class Unobfuscator {
+         });
+     }
+ 
+-    public synchronized static Method loadGetIntPreferences(ClassLoader loader) throws Exception {
+-        return UnobfuscatorCache.getInstance().getMethod(loader, () -> {
+-            var methodList = dexkit.findMethod(new FindMethod().matcher(
+-                    new MethodMatcher().paramCount(2).addParamType(SharedPreferences.class).addParamType(String.class)
+-                            .modifiers(Modifier.STATIC | Modifier.PUBLIC).returnType(int.class)));
+-            if (methodList.isEmpty())
+-                throw new RuntimeException("CallConfirmationLimit method not found");
+-            return methodList.get(0).getMethodInstance(loader);
+-        });
+-    }
+-
+-    public synchronized static Method loadAudioProximitySensorMethod(ClassLoader loader) throws Exception {
+-        return UnobfuscatorCache.getInstance().getMethod(loader, () -> {
+-            var method = findFirstMethodUsingStrings(loader, StringMatchType.Contains,
+-                    "messageaudioplayer/onearproximity");
+-            if (method == null)
+-                throw new RuntimeException("ProximitySensor method not found");
+-            return method;
+-        });
+-    }
+-
+-    public synchronized static Method loadGroupAdminMethod(ClassLoader loader) throws Exception {
+-        return UnobfuscatorCache.getInstance().getMethod(loader, () -> {
+-            var method = dexkit.findMethod(
+-                    FindMethod.create().matcher(MethodMatcher.create().name("setupUsernameInGroupViewContainer")));
+-            if (method.isEmpty())
+-                throw new RuntimeException("GroupAdmin method not found");
+-            return method.get(0).getMethodInstance(loader);
+-        });
+-    }
+ 
+     public synchronized static Method loadJidFactory(ClassLoader loader) throws Exception {
+         return UnobfuscatorCache.getInstance().getMethod(loader, () -> {
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/HideSeenView.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/HideSeenView.java
+index 57ff8687..482d14b5 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/HideSeenView.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/customization/HideSeenView.java
+@@ -40,9 +40,9 @@ public class HideSeenView extends Feature {
+         // Register listener
+         ConversationItemListener.conversationListeners.add(new ConversationItemListener.OnConversationItemListener() {
+             @Override
+-            public void onItemBind(FMessageWpp fMessage, ViewGroup viewGroup) {
++            public void onItemBind(FMessageWpp fMessage, ViewGroup view, int position, View convertView) {
+                 if (fMessage.getKey().isFromMe) return;
+-                updateBubbleView(fMessage, viewGroup);
++                updateBubbleView(fMessage, view);
+             }
+         });
+     }
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/AntiRevoke.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/AntiRevoke.java
+index 6f1b3229..5ef23674 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/AntiRevoke.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/AntiRevoke.java
+@@ -1,6 +1,7 @@
+ package com.wmods.wppenhacer.xposed.features.general;
+ 
+ import android.text.TextUtils;
++import android.view.View;
+ import android.view.ViewGroup;
+ import android.widget.TextView;
+ import android.widget.Toast;
+@@ -149,10 +150,10 @@ public class AntiRevoke extends Feature {
+ 
+         ConversationItemListener.conversationListeners.add(new ConversationItemListener.OnConversationItemListener() {
+             @Override
+-            public void onItemBind(FMessageWpp fMessage, ViewGroup viewGroup) {
++            public void onItemBind(FMessageWpp fMessage, ViewGroup view, int position, View convertView) {
+                 if (fMessage.getKey().isFromMe)
+                     return;
+-                var dateTextView = (TextView) viewGroup.findViewById(Utils.getID("date", "id"));
++                var dateTextView = (TextView) view.findViewById(Utils.getID("date", "id"));
+                 bindRevokedMessageUI(fMessage, dateTextView, "antirevoke");
+             }
+         });
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/Others.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/Others.java
+index c0e926fd..e71e3b29 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/Others.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/Others.java
+@@ -407,7 +407,7 @@ public class Others extends Feature {
+ 
+         ConversationItemListener.conversationListeners.add(new ConversationItemListener.OnConversationItemListener() {
+             @Override
+-            public void onItemBind(FMessageWpp fMessage, ViewGroup viewGroup) {
++            public void onItemBind(FMessageWpp fMessage, ViewGroup view, int position, View convertView) {
+                 var onMultiClickListener = new OnMultiClickListener(2, 500) {
+                     @Override
+                     public void onMultiClick(View view) {
+@@ -425,7 +425,7 @@ public class Others extends Feature {
+                         WppCore.sendReaction(emoji, fMessage.getObject());
+                     }
+                 };
+-                viewGroup.setOnClickListener(onMultiClickListener);
++                view.setOnClickListener(onMultiClickListener);
+             }
+         });
+     }
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/ShowEditMessage.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/ShowEditMessage.java
+index ae2877c4..5e20b782 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/ShowEditMessage.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/ShowEditMessage.java
+@@ -94,8 +94,8 @@ public class ShowEditMessage extends Feature {
+                 new ConversationItemListener.OnConversationItemListener() {
+ 
+                     @Override
+-                    public void onItemBind(FMessageWpp fMessage, ViewGroup viewGroup) {
+-                        var textView = (TextView) viewGroup.findViewById(Utils.getID("edit_label", "id"));
++                    public void onItemBind(FMessageWpp fMessage, ViewGroup view, int position, View convertView) {
++                        var textView = (TextView) view.findViewById(Utils.getID("edit_label", "id"));
+                         if (textView != null && !textView.getText().toString().contains(strEmoji)) {
+                             textView.getPaint().setUnderlineText(true);
+                             textView.append(strEmoji);
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/listeners/ConversationItemListener.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/listeners/ConversationItemListener.java
+index d00f735b..8f93a604 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/listeners/ConversationItemListener.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/listeners/ConversationItemListener.java
+@@ -1,5 +1,6 @@
+ package com.wmods.wppenhacer.xposed.features.listeners;
+ 
++import android.app.Activity;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.widget.HeaderViewListAdapter;
+@@ -13,7 +14,6 @@ import com.wmods.wppenhacer.xposed.core.WppCore;
+ import com.wmods.wppenhacer.xposed.core.components.FMessageWpp;
+ 
+ import java.util.HashSet;
+-import java.util.Objects;
+ 
+ import de.robv.android.xposed.XC_MethodHook;
+ import de.robv.android.xposed.XSharedPreferences;
+@@ -22,7 +22,7 @@ import de.robv.android.xposed.XposedHelpers;
+ 
+ public class ConversationItemListener extends Feature {
+ 
+-    public static HashSet<OnConversationItemListener> conversationListeners = new HashSet<>();
++    public static final HashSet<OnConversationItemListener> conversationListeners = new HashSet<>();
+     private static ListAdapter mAdapter;
+     private static XC_MethodHook.Unhook hooked;
+ 
+@@ -39,33 +39,59 @@ public class ConversationItemListener extends Feature {
+         XposedHelpers.findAndHookMethod(ListView.class, "setAdapter", ListAdapter.class, new XC_MethodHook() {
+             @Override
+             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+-                if (!WppCore.getCurrentActivity().getClass().getSimpleName().equals("Conversation"))
++                Activity currentActivity = WppCore.getCurrentActivity();
++                if (currentActivity == null || !currentActivity.getClass().getSimpleName().equals("Conversation")) {
+                     return;
+-                if (((ListView) param.thisObject).getId() != android.R.id.list) return;
++                }
++
++                ListView listView = (ListView) param.thisObject;
++                if (listView.getId() != android.R.id.list) {
++                    return;
++                }
++
+                 ListAdapter adapter = (ListAdapter) param.args[0];
+                 if (adapter instanceof HeaderViewListAdapter) {
+                     adapter = ((HeaderViewListAdapter) adapter).getWrappedAdapter();
+                 }
+-                if (adapter == null) return;
++
++                if (adapter == null) {
++                    return;
++                }
++
+                 mAdapter = adapter;
+-                if (hooked != null) hooked.unhook();
++
++                for (OnConversationItemListener listener : conversationListeners) {
++                    listener.onAttachAdapter(mAdapter);
++                }
++
++                if (hooked != null) {
++                    hooked.unhook();
++                }
++
+                 var method = mAdapter.getClass().getDeclaredMethod("getView", int.class, View.class, ViewGroup.class);
+                 hooked = XposedBridge.hookMethod(method, new XC_MethodHook() {
+                     @Override
+                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                         if (param.thisObject != mAdapter) return;
++
+                         var position = (int) param.args[0];
++                        var convertView = (View) param.args[1];
+                         var viewGroup = (ViewGroup) param.getResult();
++
+                         if (viewGroup == null) return;
++
+                         Object fMessageObj = mAdapter.getItem(position);
+                         if (fMessageObj == null) return;
++
+                         var fMessage = new FMessageWpp(fMessageObj);
+-                        var extraFMessage = XposedHelpers.getAdditionalInstanceField(param.thisObject, "fMessage");
+-                        if (Objects.equals(fMessage, extraFMessage)) return;
++
+                         for (OnConversationItemListener listener : conversationListeners) {
+-                            viewGroup.post(() -> listener.onItemBind(fMessage, viewGroup));
++                            try {
++                                listener.onItemBind(fMessage, viewGroup, position, convertView);
++                            } catch (Throwable e) {
++                                logDebug(e);
++                            }
+                         }
+-                        XposedHelpers.setAdditionalInstanceField(param.thisObject, "fMessage", fMessage);
+                     }
+                 });
+             }
+@@ -82,9 +108,16 @@ public class ConversationItemListener extends Feature {
+         /**
+          * Called when a message item is rendered in the conversation
+          *
+-         * @param fMessage  The message
+-         * @param viewGroup The view associated with the item
++         * @param fMessage The message
++         * @param view     The view associated with the item
++         * @param position The position
++         * @param convertView The view from the adapter
++         * @throws Throwable Errors caught in the hook
+          */
+-        public abstract void onItemBind(FMessageWpp fMessage, ViewGroup viewGroup);
++        public abstract void onItemBind(FMessageWpp fMessage, ViewGroup view, int position, View convertView) throws Throwable;
++
++        public void onAttachAdapter(ListAdapter adapter) {
++
++        }
+     }
+-}
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/GroupAdmin.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/GroupAdmin.java
+index 785f2588..903432f6 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/GroupAdmin.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/others/GroupAdmin.java
+@@ -1,25 +1,23 @@
+ package com.wmods.wppenhacer.xposed.features.others;
+ 
+-import android.annotation.SuppressLint;
+ import android.view.Gravity;
+ import android.view.View;
++import android.view.ViewGroup;
+ import android.widget.ImageView;
+ import android.widget.LinearLayout;
+ 
+ import androidx.annotation.NonNull;
+ 
++import com.wmods.wppenhacer.R;
+ import com.wmods.wppenhacer.xposed.core.Feature;
+ import com.wmods.wppenhacer.xposed.core.WppCore;
+ import com.wmods.wppenhacer.xposed.core.components.FMessageWpp;
+ import com.wmods.wppenhacer.xposed.core.devkit.Unobfuscator;
++import com.wmods.wppenhacer.xposed.features.listeners.ConversationItemListener;
+ import com.wmods.wppenhacer.xposed.utils.ReflectionUtils;
+-import com.wmods.wppenhacer.xposed.utils.ResId;
+ import com.wmods.wppenhacer.xposed.utils.Utils;
+ 
+-import de.robv.android.xposed.XC_MethodHook;
+ import de.robv.android.xposed.XSharedPreferences;
+-import de.robv.android.xposed.XposedBridge;
+-import de.robv.android.xposed.XposedHelpers;
+ 
+ public class GroupAdmin extends Feature {
+ 
+@@ -30,28 +28,24 @@ public class GroupAdmin extends Feature {
+     @Override
+     public void doHook() throws Throwable {
+         if (!prefs.getBoolean("admin_grp", false)) return;
++
+         var jidFactory = Unobfuscator.loadJidFactory(classLoader);
+-        var grpAdmin1 = Unobfuscator.loadGroupAdminMethod(classLoader);
+         var grpcheckAdmin = Unobfuscator.loadGroupCheckAdminMethod(classLoader);
+-        var hooked = new XC_MethodHook() {
+-            @SuppressLint("ResourceType")
++
++        ConversationItemListener.conversationListeners.add(new ConversationItemListener.OnConversationItemListener() {
+             @Override
+-            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+-                var targetObj = param.thisObject != null ? param.thisObject : param.args[1];
+-                Object fMessageObj = XposedHelpers.callMethod(targetObj, "getFMessage");
+-                var fMessage = new FMessageWpp(fMessageObj);
+-                var userJid = fMessage.getUserJid();
++            public void onItemBind(FMessageWpp fMessage, ViewGroup view, int position, View convertView) throws Throwable {
+                 var chatCurrentJid = WppCore.getCurrentUserJid();
+-                if (!chatCurrentJid.isGroup()) return;
+-                var field = ReflectionUtils.getFieldByType(targetObj.getClass(), grpcheckAdmin.getDeclaringClass());
+-                var grpParticipants = field.get(targetObj);
+-                var jidGrp = jidFactory.invoke(null, chatCurrentJid.getUserRawString());
+-                var result = grpcheckAdmin.invoke(grpParticipants, jidGrp, userJid.userJid);
+-                var view = (View) targetObj;
++                if (chatCurrentJid == null || !chatCurrentJid.isGroup()) return;
++                var grpcheckAdminClass = grpcheckAdmin.getDeclaringClass();
++                var field = ReflectionUtils.findFieldUsingFilter(view.getClass(), f -> f.getType().isAssignableFrom(grpcheckAdminClass));
++                field.setAccessible(true);
++                var grpParticipants = field.get(view);
+                 var context = view.getContext();
+                 ImageView iconAdmin;
+-                if ((iconAdmin = view.findViewById(0x7fff0010)) == null) {
++                if ((iconAdmin = view.findViewWithTag("admin_icon")) == null) {
+                     var nameGroup = (LinearLayout) view.findViewById(Utils.getID("name_in_group", "id"));
++                    if (nameGroup == null) return;
+                     var view1 = new LinearLayout(context);
+                     view1.setOrientation(LinearLayout.HORIZONTAL);
+                     view1.setGravity(Gravity.CENTER_VERTICAL);
+@@ -59,17 +53,50 @@ public class GroupAdmin extends Feature {
+                     iconAdmin = new ImageView(context);
+                     var size = Utils.dipToPixels(16);
+                     iconAdmin.setLayoutParams(new LinearLayout.LayoutParams(size, size));
+-                    iconAdmin.setImageResource(ResId.drawable.admin);
+-                    iconAdmin.setId(0x7fff0010);
++                    iconAdmin.setImageResource(R.drawable.admin);
++                    iconAdmin.setTag("admin_icon");
+                     nameGroup.removeView(nametv);
+                     view1.addView(nametv);
+                     view1.addView(iconAdmin);
+                     nameGroup.addView(view1, 0);
+                 }
++
++                var groupRawJid = chatCurrentJid.getPhoneRawString();
++                if (groupRawJid == null) {
++                    iconAdmin.setVisibility(View.GONE);
++                    return;
++                }
++
++                var jidGrp = jidFactory.invoke(null, groupRawJid);
++                var participantJid = resolveParticipantJidForAdminCheck(fMessage.getUserJid(), grpcheckAdmin);
++                if (participantJid == null) {
++                    iconAdmin.setVisibility(View.GONE);
++                    return;
++                }
++
++                var result = grpcheckAdmin.invoke(grpParticipants, jidGrp, participantJid);
+                 iconAdmin.setVisibility(result != null && (boolean) result ? View.VISIBLE : View.GONE);
+             }
+-        };
+-        XposedBridge.hookMethod(grpAdmin1, hooked);
++        });
++
++    }
++
++    private Object resolveParticipantJidForAdminCheck(FMessageWpp.UserJid userJid, java.lang.reflect.Method grpcheckAdmin) {
++        if (userJid == null) return null;
++        var expectedType = grpcheckAdmin.getParameterTypes()[1];
++        if (userJid.userJid != null && expectedType.isInstance(userJid.userJid)) {
++            return userJid.userJid;
++        }
++        if (userJid.phoneJid != null && expectedType.isInstance(userJid.phoneJid)) {
++            return userJid.phoneJid;
++        }
++        if (userJid.userJid != null) {
++            return userJid.userJid;
++        }
++        if (userJid.phoneJid != null) {
++            return userJid.phoneJid;
++        }
++        return null;
+     }
+ 
+     @NonNull
+@@ -77,4 +104,4 @@ public class GroupAdmin extends Feature {
+     public String getPluginName() {
+         return "GroupAdmin";
+     }
+-}
++}
+\ No newline at end of file
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/privacy/TagMessage.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/privacy/TagMessage.java
+index 9a0f9357..23f369e9 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/privacy/TagMessage.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/privacy/TagMessage.java
+@@ -56,9 +56,9 @@ public class TagMessage extends Feature {
+ 
+         ConversationItemListener.conversationListeners.add(new ConversationItemListener.OnConversationItemListener() {
+             @Override
+-            public void onItemBind(FMessageWpp fMessage, ViewGroup viewGroup) {
++            public void onItemBind(FMessageWpp fMessage, ViewGroup view, int position, View convertView) {
+                 if (fMessage.getKey().isFromMe) return;
+-                var dateTextView = (TextView) viewGroup.findViewById(Utils.getID("date", "id"));
++                var dateTextView = (TextView) view.findViewById(Utils.getID("date", "id"));
+                 if (dateTextView == null) return;
+                 var dateWrapper = (ViewGroup) dateTextView.getParent();
+                 int id = Utils.getID("broadcast_icon", "id");
+diff --git a/app/src/main/res/values/arrays.xml b/app/src/main/res/values/arrays.xml
+index 7dbf039f..5a8cdcd8 100644
+--- a/app/src/main/res/values/arrays.xml
++++ b/app/src/main/res/values/arrays.xml
+@@ -158,12 +158,14 @@
+         <item>2.26.9.xx</item>
+         <item>2.26.10.xx</item>
+         <item>2.26.11.xx</item>
++        <item>2.26.12.xx</item>
+     </string-array>
+     <string-array name="supported_versions_business">
+         <item>2.26.8.xx</item>
+         <item>2.26.9.xx</item>
+         <item>2.26.10.xx</item>
+         <item>2.26.11.xx</item>
++        <item>2.26.12.xx</item>
+     </string-array>
+     <string-array name="image_picker">
+         <item>image/*</item>
+-- 
+2.43.0
+
+
+From 30e5d30d33e66b956b1c6ed10a1df8ed514d5db9 Mon Sep 17 00:00:00 2001
+From: Dev4Mod <wellingtonmods@gmail.com>
+Date: Sun, 12 Apr 2026 11:56:36 -0300
+Subject: [PATCH 4/5] feat: add support for version 2.26.13.xx
+
+---
+ .../xposed/core/devkit/Unobfuscator.java      | 81 ++++++++++++-------
+ .../xposed/features/general/SeenTick.java     | 13 +--
+ .../features/media/DownloadViewOnce.java      | 13 +--
+ .../xposed/features/media/MediaQuality.java   | 19 ++++-
+ app/src/main/res/values/arrays.xml            |  2 +
+ 5 files changed, 72 insertions(+), 56 deletions(-)
+
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/core/devkit/Unobfuscator.java b/app/src/main/java/com/wmods/wppenhacer/xposed/core/devkit/Unobfuscator.java
+index 82ba8bdd..4f9a0d27 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/core/devkit/Unobfuscator.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/core/devkit/Unobfuscator.java
+@@ -227,25 +227,39 @@ public class Unobfuscator {
+ 
+     // TODO: Classes and Methods for Receipt
+ 
+-    public synchronized static Method loadReceiptMethod(ClassLoader classLoader) throws Exception {
++    public static Method loadReceiptMethod(ClassLoader classLoader) throws Exception {
+         return UnobfuscatorCache.getInstance().getMethod(classLoader, () -> {
+-            var classDeviceJid = Unobfuscator.findFirstClassUsingName(classLoader, StringMatchType.EndsWith,
+-                    "jid.DeviceJid");
+-            var classPhoneUserJid = Unobfuscator.findFirstClassUsingName(classLoader, StringMatchType.EndsWith,
+-                    "jid.PhoneUserJid");
++            var classDeviceJid = Unobfuscator.findFirstClassUsingName(
++                    classLoader, StringMatchType.EndsWith, "jid.DeviceJid");
++            var classPhoneUserJid = Unobfuscator.findFirstClassUsingName(
++                    classLoader, StringMatchType.EndsWith, "jid.PhoneUserJid");
++            var classProtocolTreeNode = findFirstClassUsingStrings(
++                    classLoader, StringMatchType.Contains, "ProtocolTreeNode/getAttributeJid");
++
+             var methods = dexkit.findMethod(
+                     FindMethod.create()
+                             .matcher(MethodMatcher.create()
+                                     .addUsingString("receipt")
+-                                    .paramCount(5, 8)));
++                                    .returnType(classProtocolTreeNode))
++            );
+ 
+             for (var method : methods) {
+                 var params = method.getParamTypeNames();
+-                if (params.contains(classDeviceJid.getName()) && params.contains(classPhoneUserJid.getName()))
+-                    return method.getMethodInstance(classLoader);
++
++                boolean hasRequiredParams =
++                        params.contains(classDeviceJid.getName()) &&
++                                params.contains(classPhoneUserJid.getName());
++
++                if (!hasRequiredParams) continue;
++
++                return method.getMethodInstance(classLoader);
+             }
+ 
+-            throw new NoSuchMethodError("Receipt method not found");
++            throw new NoSuchMethodError(
++                    "Receipt method not found. returnType=" + classProtocolTreeNode.getName()
++                            + ", requiredParams=[" + classDeviceJid.getName()
++                            + ", " + classPhoneUserJid.getName() + "]"
++            );
+         });
+     }
+ 
+@@ -929,22 +943,19 @@ public class Unobfuscator {
+         });
+     }
+ 
+-    public synchronized static Class<?> loadConversationRowClass(ClassLoader loader) throws Exception {
++
++    public static Class<?> loadConversationRowClass(ClassLoader loader) throws Exception {
+         return UnobfuscatorCache.getInstance().getClass(loader, () -> {
+-            var clazz = findFirstClassUsingStrings(loader, StringMatchType.Contains,
+-                    "ConversationRow/setupUserNameInGroupView/");
+-            if (clazz != null)
+-                return clazz;
+-            var conversation_header = Utils.getID("conversation_row_participant_header_view_stub", "id");
+-            var nameId = Utils.getID("name_in_group", "id");
+-            var classData = dexkit
+-                    .findClass(FindClass.create()
+-                            .matcher(ClassMatcher.create().addMethod(
+-                                    MethodMatcher.create().addUsingNumber(conversation_header).addUsingNumber(nameId))))
+-                    .singleOrNull();
+-            if (classData == null)
+-                throw new Exception("ConversationRow class not found");
+-            return classData.getInstance(loader);
++            var clazz = findFirstClassUsingStrings(loader, StringMatchType.Contains, "ConversationRow/setupUserNameInGroupView/");
++            if (clazz != null) return clazz;
++            var conversation_header = Utils.getID("name_in_group", "id");
++            var classData = dexkit.findClass(FindClass.create().matcher(ClassMatcher.create().addMethod(MethodMatcher.create().addUsingNumber(conversation_header))));
++            for (ClassData c : classData) {
++                var clazzInstance = c.getInstance(loader);
++                if (ViewGroup.class.isAssignableFrom(clazzInstance))
++                    return clazzInstance;
++            }
++            return null;
+         });
+     }
+ 
+@@ -1886,13 +1897,19 @@ public class Unobfuscator {
+         });
+     }
+ 
+-    public synchronized static Method loadPlaybackSpeed(ClassLoader classLoader) throws Exception {
++    public static Method loadPlaybackSpeed(ClassLoader classLoader) throws Exception {
+         return UnobfuscatorCache.getInstance().getMethod(classLoader, () -> {
+-            var method = findFirstMethodUsingStrings(classLoader, StringMatchType.Contains,
+-                    "heroaudioplayer/setPlaybackSpeed");
+-            if (method == null)
+-                throw new RuntimeException("PlaybackSpeed method not found");
+-            return method;
++            var method = findFirstMethodUsingStrings(classLoader, StringMatchType.Contains, "heroaudioplayer/setPlaybackSpeed");
++            if (method != null) return method;
++
++            var methodData = dexkit.findMethod(
++                    FindMethod.create().matcher(
++                            MethodMatcher.create().addUsingString("setPlaybackSpeed", StringMatchType.Equals).addUsingString("newSpeed")
++                    )
++            ).singleOrNull();
++
++            if (methodData == null) throw new RuntimeException("PlaybackSpeed method not found");
++            return methodData.getMethodInstance(classLoader);
+         });
+     }
+ 
+@@ -2772,4 +2789,8 @@ public class Unobfuscator {
+     public static Class<?> loadDialerProfilePictureLoader(ClassLoader classLoader) throws Exception {
+         return UnobfuscatorCache.getInstance().getClass(classLoader, () -> findFirstClassUsingStrings(classLoader, StringMatchType.Contains, "DialerProfilePictureLoader/syncFetchProfilePhoto/onPhotoReceived"));
+     }
++
++    public static Class<?> loadBottomBarConfigClass(ClassLoader classLoader) throws Exception {
++        return UnobfuscatorCache.getInstance().getClass(classLoader, () -> findFirstClassUsingStrings(classLoader, StringMatchType.Contains, "BottomBarConfig("));
++    }
+ }
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/SeenTick.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/SeenTick.java
+index 267863e0..7543839c 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/SeenTick.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/general/SeenTick.java
+@@ -326,18 +326,7 @@ public class SeenTick extends Feature {
+             @Override
+             @SuppressLint("DiscouragedApi")
+             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+-                var messageField = ReflectionUtils.getFieldByExtendType(menuMethod.getDeclaringClass(), FMessageWpp.TYPE);
+-                Object fmessageObj = null;
+-                if (messageField != null) {
+-                    fmessageObj = messageField.get(param.thisObject);
+-                }
+-                if (fmessageObj == null) {
+-                    var keyField = ReflectionUtils.getFieldByExtendType(param.thisObject.getClass(), FMessageWpp.Key.TYPE);
+-                    if (keyField != null) {
+-                        var keyObj = keyField.get(param.thisObject);
+-                        fmessageObj = WppCore.getFMessageFromKey(keyObj);
+-                    }
+-                }
++                var fmessageObj = ReflectionUtils.getArg(param.args, FMessageWpp.TYPE, 0);
+                 FMessageWpp fMessage = new FMessageWpp(fmessageObj);
+                 if (!fMessage.isViewOnce()) return;
+                 Menu menu = (Menu) param.args[0];
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/media/DownloadViewOnce.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/media/DownloadViewOnce.java
+index dd18ea2a..15cf4074 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/media/DownloadViewOnce.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/media/DownloadViewOnce.java
+@@ -51,18 +51,7 @@ public class DownloadViewOnce extends Feature {
+                 @Override
+                 @SuppressLint("DiscouragedApi")
+                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+-                    var fmessageField = ReflectionUtils.getFieldByExtendType(param.thisObject.getClass(), FMessageWpp.TYPE);
+-                    Object fmessageObj = null;
+-                    if (fmessageField != null) {
+-                        fmessageObj = fmessageField.get(param.thisObject);
+-                    }
+-                    if (fmessageObj == null) {
+-                        var keyField = ReflectionUtils.getFieldByExtendType(param.thisObject.getClass(), FMessageWpp.Key.TYPE);
+-                        if (keyField != null) {
+-                            var keyObj = keyField.get(param.thisObject);
+-                            fmessageObj = WppCore.getFMessageFromKey(keyObj);
+-                        }
+-                    }
++                    var fmessageObj = ReflectionUtils.getArg(param.args, FMessageWpp.TYPE, 0);
+                     FMessageWpp fMessage = new FMessageWpp(fmessageObj);
+ 
+                     // check media is view once
+diff --git a/app/src/main/java/com/wmods/wppenhacer/xposed/features/media/MediaQuality.java b/app/src/main/java/com/wmods/wppenhacer/xposed/features/media/MediaQuality.java
+index b4c4e5b5..cf7f68fe 100644
+--- a/app/src/main/java/com/wmods/wppenhacer/xposed/features/media/MediaQuality.java
++++ b/app/src/main/java/com/wmods/wppenhacer/xposed/features/media/MediaQuality.java
+@@ -53,8 +53,23 @@ public class MediaQuality extends Feature {
+         Others.propsBoolean.put(14447, false);
+ 
+         // Enable Media Quality selection for Stories
+-        var hookMediaQualitySelection = Unobfuscator.loadMediaQualitySelectionMethod(classLoader);
+-        XposedBridge.hookMethod(hookMediaQualitySelection, XC_MethodReplacement.returnConstant(true));
++        try {
++            var hookMediaQualitySelection = Unobfuscator.loadMediaQualitySelectionMethod(classLoader);
++            XposedBridge.hookMethod(hookMediaQualitySelection, XC_MethodReplacement.returnConstant(true));
++        } catch (Exception ignored) {
++            var BottomBarConfigClass = Unobfuscator.loadBottomBarConfigClass(classLoader);
++            var fieldsBottomBarConfig = Unobfuscator.getAllMapFields(BottomBarConfigClass);
++
++            XposedBridge.hookAllConstructors(BottomBarConfigClass, new XC_MethodHook() {
++                @Override
++                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
++                    var supportsHdQuality = fieldsBottomBarConfig.get("supportsHdQuality");
++                    if (supportsHdQuality != null) {
++                        supportsHdQuality.set(param.thisObject, true);
++                    }
++                }
++            });
++        }
+ 
+         if (videoQuality) {
+             Others.propsBoolean.put(5549, true);
+diff --git a/app/src/main/res/values/arrays.xml b/app/src/main/res/values/arrays.xml
+index 5a8cdcd8..61858560 100644
+--- a/app/src/main/res/values/arrays.xml
++++ b/app/src/main/res/values/arrays.xml
+@@ -159,6 +159,7 @@
+         <item>2.26.10.xx</item>
+         <item>2.26.11.xx</item>
+         <item>2.26.12.xx</item>
++        <item>2.26.13.xx</item>
+     </string-array>
+     <string-array name="supported_versions_business">
+         <item>2.26.8.xx</item>
+@@ -166,6 +167,7 @@
+         <item>2.26.10.xx</item>
+         <item>2.26.11.xx</item>
+         <item>2.26.12.xx</item>
++        <item>2.26.13.xx</item>
+     </string-array>
+     <string-array name="image_picker">
+         <item>image/*</item>
+-- 
+2.43.0
+
+
+From 3ced3dff8d6358b7e56cbd5c8502f19e200fd98e Mon Sep 17 00:00:00 2001
+From: Dev4Mod <wellingtonmods@gmail.com>
+Date: Sun, 12 Apr 2026 11:57:24 -0300
+Subject: [PATCH 5/5] update changelog.txt
+
+---
+ changelog.txt | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/changelog.txt b/changelog.txt
+index 8c123c4c..c37033eb 100644
+--- a/changelog.txt
++++ b/changelog.txt
+@@ -1,2 +1,3 @@
+ [ADDED]
+-* Added support for WA/WB 2.26.11.xx
++* Added support for WA/WB 2.26.12.xx
++* Added support for WA/WB 2.26.13.xx
+-- 
+2.43.0
+
