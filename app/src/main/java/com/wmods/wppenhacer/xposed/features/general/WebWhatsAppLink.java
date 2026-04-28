@@ -31,7 +31,7 @@ public class WebWhatsAppLink extends Feature {
 
         for (String activityName : activities) {
             try {
-                Class<?> activityClass = XposedHelpers.findClass(activityName, loader);
+                Class<?> activityClass = XposedHelpers.findClass(activityName, classLoader);
                 XposedBridge.hookAllMethods(activityClass, "onCreate", new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
