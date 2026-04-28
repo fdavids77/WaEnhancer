@@ -10,6 +10,9 @@
         <item>com.whatsapp.clone5</item>
         <item>com.whatsapp.clone6</item>
         <item>com.whatsapp.clone7</item>
+        <item>com.whatsapp.clone9</item>
+        <item>com.whatsapp.clone10</item>
+        <item>com.whatsapp.clone11</item>
         <item>android</item>
     </string-array>
 
@@ -164,7 +167,6 @@
         <item>2.26.11.xx</item>
         <item>2.26.12.xx</item>
         <item>2.26.13.xx</item>
-        <item>2.26.14.xx</item>
         <item>2.26.14.xx</item>
         <item>2.26.15.xx</item>
     </string-array>
