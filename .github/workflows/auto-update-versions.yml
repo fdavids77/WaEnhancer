@@ -1,0 +1,150 @@
+name: Check & Update WhatsApp Versions
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force build even if no new version found'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  check-and-update:
+    runs-on: ubuntu-latest
+    permissions: write-all
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for new WhatsApp versions
+        id: check_version
+        run: |
+          CURRENT_VERSIONS=$(grep -oP '2\.\d+\.\d+\.xx' app/src/main/res/values/arrays.xml | sort -u)
+          echo "Current supported versions:"
+          echo "$CURRENT_VERSIONS"
+
+          HIGHEST_MINOR=$(echo "$CURRENT_VERSIONS" | grep -oP '2\.26\.\K\d+' | sort -n | tail -1)
+          echo "Highest supported minor: $HIGHEST_MINOR"
+
+          LATEST_INFO=$(curl -sL "https://apkpure.net/whatsapp-android/com.whatsapp" \
+            -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
+            | grep -oP '2\.26\.\d+\.\d+' | head -1 || true)
+
+          if [ -z "$LATEST_INFO" ]; then
+            LATEST_INFO=$(curl -sL "https://whatsapp.en.uptodown.com/android" \
+              -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
+              | grep -oP '2\.26\.\d+\.\d+' | head -1 || true)
+          fi
+
+          if [ -z "$LATEST_INFO" ]; then
+            LATEST_INFO=$(curl -sL "https://wabetainfo.com/" \
+              -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36" \
+              | grep -oP '2\.26\.\d+\.\d+' | sort -t. -k3 -n | tail -1 || true)
+          fi
+
+          echo "Latest version found online: $LATEST_INFO"
+
+          if [ -z "$LATEST_INFO" ]; then
+            echo "Could not determine latest WhatsApp version"
+            echo "new_versions_found=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          LATEST_MINOR=$(echo "$LATEST_INFO" | grep -oP '2\.26\.\K\d+')
+          echo "Latest minor version: $LATEST_MINOR"
+
+          NEW_VERSIONS=""
+          NEXT=$((HIGHEST_MINOR + 1))
+          while [ "$NEXT" -le "$LATEST_MINOR" ]; do
+            NEW_VERSIONS="$NEW_VERSIONS 2.26.${NEXT}.xx"
+            NEXT=$((NEXT + 1))
+          done
+
+          if [ -z "$NEW_VERSIONS" ] && [ "${{ inputs.force_build }}" != "true" ]; then
+            echo "No new versions to add (latest $LATEST_MINOR <= supported $HIGHEST_MINOR)"
+            echo "new_versions_found=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "New versions to add:$NEW_VERSIONS"
+          echo "new_versions_found=true" >> $GITHUB_OUTPUT
+          echo "new_versions=$NEW_VERSIONS" >> $GITHUB_OUTPUT
+          echo "latest_minor=$LATEST_MINOR" >> $GITHUB_OUTPUT
+          echo "highest_minor=$HIGHEST_MINOR" >> $GITHUB_OUTPUT
+
+      - name: Update arrays.xml with new versions
+        if: steps.check_version.outputs.new_versions_found == 'true'
+        run: |
+          NEW_VERSIONS="${{ steps.check_version.outputs.new_versions }}"
+          HIGHEST="${{ steps.check_version.outputs.highest_minor }}"
+
+          for VERSION in $NEW_VERSIONS; do
+            echo "Adding $VERSION to supported versions..."
+
+            sed -i "/<string-array name=\"supported_versions_wpp\">/,/<\/string-array>/ {
+              /<item>2\.26\.${HIGHEST}\.xx<\/item>/a\\        <item>${VERSION}<\/item>
+            }" app/src/main/res/values/arrays.xml
+
+            sed -i "/<string-array name=\"supported_versions_business\">/,/<\/string-array>/ {
+              /<item>2\.26\.${HIGHEST}\.xx<\/item>/a\\        <item>${VERSION}<\/item>
+            }" app/src/main/res/values/arrays.xml
+
+            HIGHEST=$(echo "$VERSION" | grep -oP '2\.26\.\K\d+')
+          done
+
+          echo "[ADDED]" > changelog.txt
+          echo "* Added support for WA/WB$NEW_VERSIONS (auto-update)" >> changelog.txt
+
+          echo "Updated arrays.xml:"
+          grep -A20 "supported_versions_wpp" app/src/main/res/values/arrays.xml | head -25
+
+      - name: Commit and push changes
+        if: steps.check_version.outputs.new_versions_found == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin master
+          git add app/src/main/res/values/arrays.xml changelog.txt
+          git commit -m "feat: add support for WA/WB${{ steps.check_version.outputs.new_versions }} (auto-update)"
+          git push
+
+      - name: Set up JDK 17
+        if: steps.check_version.outputs.new_versions_found == 'true'
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Write signing key
+        if: steps.check_version.outputs.new_versions_found == 'true'
+        env:
+          KEY_STORE: ${{ secrets.KEY_STORE }}
+        run: |
+          if [ ! -z "$KEY_STORE" ]; then
+            echo androidStorePassword='${{ secrets.KEY_STORE_PASSWORD }}' >> gradle.properties
+            echo androidKeyAlias='${{ secrets.ALIAS }}' >> gradle.properties
+            echo androidKeyPassword='${{ secrets.KEY_PASSWORD }}' >> gradle.properties
+            echo androidStoreFile='key.jks' >> gradle.properties
+            echo "$KEY_STORE" | base64 --decode > key.jks
+          fi
+
+      - name: Build APKs
+        if: steps.check_version.outputs.new_versions_found == 'true'
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleWhatsappDebug assembleBusinessDebug -Pminify=true
+
+      - name: Create release
+        if: steps.check_version.outputs.new_versions_found == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: "WaEnhancer — WA/WB${{ steps.check_version.outputs.new_versions }}"
+          body_path: changelog.txt
+          files: |
+            app/build/outputs/apk/whatsapp/debug/app-whatsapp-debug.apk
+            app/build/outputs/ap
