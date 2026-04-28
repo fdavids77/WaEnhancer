@@ -44,6 +44,7 @@ import com.wmods.wppenhacer.xposed.features.general.ChatLimit;
 import com.wmods.wppenhacer.xposed.features.general.DeleteStatus;
 import com.wmods.wppenhacer.xposed.features.general.LiteMode;
 import com.wmods.wppenhacer.xposed.features.general.RecoverDeleteForMe;
+import com.wmods.wppenhacer.xposed.features.general.WebWhatsAppLink;
 import com.wmods.wppenhacer.xposed.features.general.NewChat;
 import com.wmods.wppenhacer.xposed.features.general.Others;
 import com.wmods.wppenhacer.xposed.features.general.PinnedLimit;
@@ -407,7 +408,8 @@ public class FeatureLoader {
                 CallRecording.class,
                 BackupRestore.class,
                 Spy.class,
-                RecoverDeleteForMe.class
+                RecoverDeleteForMe.class,
+                WebWhatsAppLink.class
         };
         XposedBridge.log("Loading Plugins");
         var executorService = Executors.newWorkStealingPool(Math.min(Runtime.getRuntime().availableProcessors(), 4));

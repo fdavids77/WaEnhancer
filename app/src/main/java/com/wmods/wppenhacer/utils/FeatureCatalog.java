@@ -122,6 +122,14 @@ public class FeatureCatalog {
                 "general_home",
                 Arrays.asList("bootloader", "spoofer", "ban")));
 
+        catalog.add(new SearchableFeature("web_whatsapp_link",
+                context.getString(R.string.web_whatsapp_link),
+                context.getString(R.string.web_whatsapp_link_sum),
+                SearchableFeature.Category.GENERAL_HOME,
+                SearchableFeature.FragmentType.GENERAL,
+                "general_home",
+                Arrays.asList("web", "link", "clone", "device", "qr", "phone", "number")));
+
         catalog.add(new SearchableFeature("ampm",
                 context.getString(R.string.ampm),
                 null,

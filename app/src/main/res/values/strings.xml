@@ -479,4 +479,7 @@
     <string name="warning_restore">When restoring the backup all messages after the backup will be lost, are you sure you want to continue?</string>
     <string name="force_restore_backup_experimental">Force Restore Backup (Experimental)</string>
     <string name="contact_probably_not_added">Contact probably didn\'t add you!</string>
+    <!-- Web WhatsApp Link Feature -->
+    <string name="web_whatsapp_link">Web WhatsApp Link</string>
+    <string name="web_whatsapp_link_sum">Replace QR scanner with web.whatsapp.com WebView. Enables device linking on cloned/renamed packages using web protocol (BASIC integrity only).</string>
 </resources>

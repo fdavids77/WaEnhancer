@@ -83,6 +83,12 @@
             android:summary="No file selected" />
 
         <rikka.material.preference.MaterialSwitchPreference
+            app:key="web_whatsapp_link"
+            app:defaultValue="false"
+            app:summary="@string/web_whatsapp_link_sum"
+            app:title="@string/web_whatsapp_link" />
+
+        <rikka.material.preference.MaterialSwitchPreference
             app:key="ampm"
             app:title="@string/ampm" />
 
