@@ -7,7 +7,6 @@ import android.webkit.WebView;
 import androidx.annotation.NonNull;
 
 import com.wmods.wppenhacer.xposed.core.Feature;
-import com.wmods.wppenhacer.xposed.core.WppCore;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XSharedPreferences;
@@ -16,8 +15,8 @@ import de.robv.android.xposed.XposedHelpers;
 
 public class WebWhatsAppLink extends Feature {
 
-    public WebWhatsAppLink(@NonNull ClassLoader loader, @NonNull XSharedPreferences preferences) {
-        super(loader, preferences);
+    public WebWhatsAppLink(@NonNull ClassLoader classLoader, @NonNull XSharedPreferences preferences) {
+        super(classLoader, preferences);
     }
 
     @Override
@@ -25,6 +24,7 @@ public class WebWhatsAppLink extends Feature {
         if (!prefs.getBoolean("web_whatsapp_link", false)) return;
 
         String[] activities = {
+            "com.whatsapp.waffle.sso.ui.LinkedUsersActivity",
             "com.whatsapp.companiondevice.qrcode.DevicePairQrScannerActivity",
             "com.whatsapp.companionmode.registration.ui.RegisterAsCompanionActivity"
         };
@@ -45,12 +45,12 @@ public class WebWhatsAppLink extends Feature {
                         settings.setUseWideViewPort(true);
                         activity.setContentView(webView);
                         webView.loadUrl("https://web.whatsapp.com");
-                        XposedBridge.log("WebWhatsAppLink: Replaced UI with WebView in " + activityName);
+                        XposedBridge.log("WebWhatsAppLink: Replaced " + activityName + " with WebView");
                     }
                 });
                 XposedBridge.log("WebWhatsAppLink: Hooked " + activityName);
             } catch (Exception e) {
-                XposedBridge.log("WebWhatsAppLink: Failed to hook " + activityName + ": " + e.getMessage());
+                XposedBridge.log("WebWhatsAppLink: Failed " + activityName + ": " + e.getMessage());
             }
         }
     }
