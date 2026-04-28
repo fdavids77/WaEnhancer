@@ -1,3 +1,5 @@
 [ADDED]
-* Added support for WA/WB 2.26.12.xx
-* Added support for WA/WB 2.26.13.xx
+* Added support to WA 2.26.15.xx
+
+[WAE]
+* Update translations from crowdin

@@ -11,12 +11,13 @@ import android.widget.BaseAdapter;
 import androidx.annotation.NonNull;
 
 import com.wmods.wppenhacer.xposed.core.Feature;
-import com.wmods.wppenhacer.xposed.core.WppCore;
 import com.wmods.wppenhacer.xposed.core.db.MessageStore;
 import com.wmods.wppenhacer.xposed.core.devkit.Unobfuscator;
 import com.wmods.wppenhacer.xposed.core.devkit.UnobfuscatorCache;
 import com.wmods.wppenhacer.xposed.utils.ReflectionUtils;
 import com.wmods.wppenhacer.xposed.utils.Utils;
+
+import org.luckypray.dexkit.query.enums.StringMatchType;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -26,6 +27,7 @@ import java.util.Objects;
 import java.util.regex.Pattern;
 
 import de.robv.android.xposed.XC_MethodHook;
+import de.robv.android.xposed.XC_MethodReplacement;
 import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
@@ -34,8 +36,6 @@ public class SeparateGroup extends Feature {
 
     public static final int CHATS = 200;
     public static final int STATUS = 300;
-    //    public static final int CALLS = 400;
-//    public static final int COMMUNITY = 600;
     public static final int GROUPS = 500;
     public static ArrayList<Integer> tabs = new ArrayList<>();
     public static HashMap<Integer, Object> tabInstances = new HashMap<>();
@@ -45,20 +45,19 @@ public class SeparateGroup extends Feature {
     }
 
     public void doHook() throws Exception {
-
-        var cFragClass = XposedHelpers.findClass("com.whatsapp.conversationslist.ConversationsFragment", classLoader);
-        var homeActivityClass = WppCore.getHomeActivityClass(classLoader);
-
         if (!prefs.getBoolean("separategroups", false)) return;
 
+        var bottomNavigationViewCls = Unobfuscator.findFirstClassUsingName(classLoader, StringMatchType.EndsWith, ".BottomNavigationView");
+        XposedHelpers.findAndHookMethod(bottomNavigationViewCls, "getMaxItemCount", XC_MethodReplacement.returnConstant(6));
+
         // Modifying tab list order
-        hookTabList(homeActivityClass);
+        hookTabList();
 
         // Setting group icon
         hookTabIcon();
 
         // Setting up fragments
-        hookTabInstance(cFragClass);
+        hookTabInstance();
 
         // Setting group tab name
         hookTabName();
@@ -141,30 +140,27 @@ public class SeparateGroup extends Feature {
 
         XposedBridge.hookMethod(iconTabMethod, new XC_MethodHook() {
 
-                    private Unhook hooked;
-
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        hooked = XposedBridge.hookMethod(menuAddAndroidX, new XC_MethodHook() {
-                            @Override
-                            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                                if (param.args.length > 2 && ((int) param.args[1]) == GROUPS) {
-                                    MenuItem menuItem = (MenuItem) param.getResult();
-                                    menuItem.setIcon(Utils.getID("home_tab_communities_selector", "drawable"));
-                                }
-                            }
-                        });
-                    }
-
-                    @SuppressLint("ResourceType")
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                var hooked = XposedBridge.hookMethod(menuAddAndroidX, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        if (hooked != null) {
-                            hooked.unhook();
+                        if (param.args.length > 2 && ((int) param.args[1]) == GROUPS) {
+                            MenuItem menuItem = (MenuItem) param.getResult();
+                            menuItem.setIcon(Utils.getID("home_tab_communities_selector", "drawable"));
                         }
                     }
-                }
-        );
+                });
+                param.setObjectExtra("hooked", hooked);
+            }
+
+            @SuppressLint("ResourceType")
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                var hooked = (Unhook) param.getObjectExtra("hooked");
+                if (hooked != null) hooked.unhook();
+            }
+        });
     }
 
     @SuppressLint("ResourceType")
@@ -181,7 +177,9 @@ public class SeparateGroup extends Feature {
         });
     }
 
-    private void hookTabInstance(Class<?> cFrag) throws Exception {
+    private void hookTabInstance() throws Exception {
+        var cFragClass = Unobfuscator.findFirstClassUsingName(classLoader, StringMatchType.EndsWith, ".ConversationsFragment");
+
         var getTabMethod = Unobfuscator.loadGetTabMethod(classLoader);
         logDebug(Unobfuscator.getMethodDescriptor(getTabMethod));
 
@@ -221,16 +219,16 @@ public class SeparateGroup extends Feature {
         XposedBridge.hookMethod(getTabMethod, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                var tabId = tabs.get((int) param.args[0]).intValue();
+                var tabId = tabs.get((int) param.args[0]);
                 if (tabId == GROUPS || tabId == CHATS) {
-                    var convFragment = cFrag.newInstance();
+                    var convFragment = cFragClass.newInstance();
                     param.setResult(convFragment);
                 }
             }
 
             @Override
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                var tabId = tabs.get((int) param.args[0]).intValue();
+                var tabId = tabs.get((int) param.args[0]);
                 tabInstances.remove(tabId);
                 tabInstances.put(tabId, param.getResult());
             }
@@ -267,7 +265,7 @@ public class SeparateGroup extends Feature {
                 var chatsList = (List) XposedHelpers.getObjectField(filters, "values");
                 var baseField = ReflectionUtils.getFieldByExtendType(publishResultsMethod.getDeclaringClass(), BaseAdapter.class);
                 if (baseField == null) return;
-                var convField = ReflectionUtils.getFieldByType(baseField.getType(), cFrag);
+                var convField = ReflectionUtils.getFieldByType(baseField.getType(), cFragClass);
                 Object thiz = convField.get(baseField.get(param.thisObject));
                 if (thiz == null) return;
                 var resultList = filterChat(thiz, chatsList);
@@ -288,20 +286,15 @@ public class SeparateGroup extends Feature {
         return editableChatList;
     }
 
-    private void hookTabList(@NonNull Class<?> home) throws Exception {
+    private void hookTabList() throws Exception {
         var onCreateTabList = Unobfuscator.loadTabListMethod(classLoader);
         logDebug(Unobfuscator.getMethodDescriptor(onCreateTabList));
-        var fieldTabsList = ReflectionUtils.getFieldByExtendType(home, List.class);
-        if (fieldTabsList == null) {
-            throw new NullPointerException("fieldTabList is NULL!");
-        }
+
         XposedBridge.hookMethod(onCreateTabList, new XC_MethodHook() {
             @Override
-            @SuppressWarnings("unchecked")
             protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                tabs = (ArrayList<Integer>) fieldTabsList.get(null);
+                tabs = (ArrayList<Integer>) param.getResult();
                 if (tabs == null) return;
-                if (!prefs.getBoolean("separategroups", false)) return;
                 if (!tabs.contains(GROUPS)) {
                     tabs.add(tabs.isEmpty() ? 0 : 1, GROUPS);
                 }
@@ -350,12 +343,12 @@ public class SeparateGroup extends Feature {
             if (jid == null) return true;
             if (XposedHelpers.findMethodExactIfExists(jid.getClass(), "getServer") != null) {
                 var server = (String) callMethod(jid, "getServer");
-                if (isGroup)
-                    return server.equals("broadcast") || server.equals("g.us");
+                if (isGroup) return server.equals("broadcast") || server.equals("g.us");
                 return server.equals("s.whatsapp.net") || server.equals("lid");
             }
             return true;
         }
     }
+
 
 }

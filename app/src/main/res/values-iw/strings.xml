@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="force_restore_backup">גיבוי שחזור כפוי</string>
+    <string name="force_restore_backup_summary">הפעל את מסך שחזור הגיבוי באופן ידני. השתמש באפשרות זו אם דילגת על השחזור במהלך ההתקנה.</string>
     <string name="app_desc">מודול ווצאפ - Enhancer</string>
     <string name="antirevoke">חסימת מחיקת הודעות</string>
     <string name="antirevoke_sum">הודעות לא יימחקו אצלך</string>
@@ -30,6 +32,9 @@
     <string name="videoquality_sum">שלח סרטונים באיכות HD, כברירת מחדל</string>
     <string name="colors_customization">התאם אישית את הצבעים שלך</string>
     <string name="colors_customization_sum">שנה את כל הצבעים בווצאפ שלך (עובד רק בעיצוב כהה)</string>
+    <string name="changecolor_mode">מקור צבע</string>
+    <string name="changecolor_mode_manual">בורר צבעים</string>
+    <string name="changecolor_mode_monet">אוטומטי (מונה, אנדרואיד 12+)</string>
     <string name="general">כללי</string>
     <string name="restart_whatsapp">הפעל מחדש את ווצאפ</string>
     <string name="conversation">מסך שיחה</string>
@@ -226,6 +231,17 @@
     <string name="disable_default_emojis">השבת אימוג\'י ברירת מחדל</string>
     <string name="theme_mode">Wa Enhancer - ערכת נושא כהה</string>
     <string name="theme_mode_sum">הפעל מצב ערכת נושא ב-Wa Enhancer</string>
+    <string name="wae_color_mode">מצב צבע WAE</string>
+    <string name="wae_color_preset">צבע מוגדר מראש</string>
+    <string name="wae_color_mode_preset">הגדרה מראש</string>
+    <string name="wae_color_mode_auto_monet">אוטומטי (מונה)</string>
+    <string name="color_preset_green">ירוק</string>
+    <string name="color_preset_blue">כחול</string>
+    <string name="color_preset_cyan">טורקיז</string>
+    <string name="color_preset_purple">סגול</string>
+    <string name="color_preset_orange">תפוז</string>
+    <string name="color_preset_red">אדום</string>
+    <string name="color_preset_pink">ורוד</string>
     <string name="disable_default_emojis_sum">השבת את אימוג\'י ברירת המחדל של ווצאפ והשתמש באימוג\'י המערכת שבטלפון שלך\n(הערה: אימוג\'י הווצאפ ייעלמו מהמקלדת הרגילה של הווצאפ, לכן מומלץ להשתמש במקלדת של הטלפון שלכם בכדי לשלוח אימוג\'י).</string>
     <string name="other">אחר</string>
     <string name="enable_media_preview">אפשר תצוגה מקדימה של מדיה (①)</string>
@@ -284,6 +300,7 @@
     <string name="installation_desc">1. ודא שהמכשיר שלך מושרש.\n2.  התקן את Xposed Framework במכשיר שלך.\n3.  הורד את Wa Enhancer מקטע הפעולות.\n4.  התקן את ה-APK של Wa Enhancer.\n5.  הפעל את מודול Wa Enhancer באפליקציית Xposed Installer.</string>
     <string name="go_to_telegram">לך לטלגרם</string>
     <string name="go_to_github">לך לאתר GitHub</string>
+    <string name="contributors">תורמים</string>
     <string name="support">תמיכה</string>
     <string name="support_desc">אם אתה נתקל בבעיות כלשהן או שיש לך שאלות והערות לגבי המודול Wa Enhancer, אנא בקר בטלגרם שלנו.
 תורגם לעברית ע\'\'י אורי.</string>
@@ -418,16 +435,47 @@
     <string name="disable_status_in_the_profile_photo">השבתת סטטוס בתמונת הפרופיל</string>
     <string name="disable_status_in_the_profile_photo_sum">מבטל את העיגול שמופיע בתמונת הפרופיל של כל איש קשר כאשר יש סטטוס חדש</string>
     <string name="download_not_available">ההורדה אינה זמינה או שהמדיה לא הורדה במלואה</string>
-    <string name="possible_block_detected">Possible block detected</string>
-    <string name="block_not_detected">Block not detected</string>
-    <string name="checking_if_the_contact_is_blocked">Checking if the contact is blocked...</string>
-    <string name="show_contact_blocked">Show Contact Blocked in Conversation</string>
-    <string name="show_contact_blocked_sum">This option verifies whether the contact may have blocked you (note: false positives may occur).</string>
-    <string name="block_unverified">Block Unverified</string>
-    <string name="disable_whatsapp_expiration">Disable WhatsApp Expiration</string>
-    <string name="disable_whatsapp_expiration_sum">Deactivates the expired version of WhatsApp, (Note: Manual Disable to update WhatsApp on the Play Store or mark the Play Store on LSposed)</string>
-    <string name="disable_ads">Disable Ads</string>
-    <string name="disable_ads_sum">Blocks ads from appearing in WhatsApp</string>
-    <string name="lockedchats_enhancer">Enhanced Locked Chats</string>
-    <string name="lockedchats_enhancer_sum">Improve locked chats by hiding notifications and contacts from the contact list</string>
+    <string name="possible_block_detected">זוהתה חסימה אפשרית</string>
+    <string name="block_not_detected">חסימה לא זוהתה</string>
+    <string name="checking_if_the_contact_is_blocked">בודק אם איש הקשר חסום...</string>
+    <string name="show_contact_blocked">הצג איש קשר חסום בשיחה</string>
+    <string name="show_contact_blocked_sum">אפשרות זו מאמתת האם איש הקשר חסם אותך (הערה: תוצאות חיוביות שגויות עלולות להתרחש).</string>
+    <string name="block_unverified">חסימה לא מאומתת</string>
+    <string name="disable_whatsapp_expiration">השבת תוקף WhatsApp</string>
+    <string name="disable_whatsapp_expiration_sum">מבטל את גרסת WhatsApp שפג תוקפה, (הערה: השבתה ידנית לעדכון WhatsApp בחנות Play או סימון חנות Play ב-LSposed)</string>
+    <string name="lockedchats_enhancer">צ\'אטים נעולים משופרים</string>
+    <string name="lockedchats_enhancer_sum">שיפור צ\'אטים נעולים על ידי הסתרת התראות ואנשי קשר מרשימת אנשי הקשר</string>
+    <string name="call_recording_title">הקלטת שיחות</string>
+    <string name="call_recording_enable">הפעל הקלטת שיחות</string>
+    <string name="call_recording_enable_sum">הקלט שיחות נכנסות ויוצאות (קול&amp; וידאו) כשמע.</string>
+    <string name="call_recording_path">תיקיית פלט הקלטות</string>
+    <string name="video_call_screen_rec">הקלטת שיחות וידאו (מסך)</string>
+    <string name="video_call_screen_rec_locked">בקרוב!</string>
+    <string name="coming_soon">בקרוב!</string>
+    <string name="recording_mode">מצב הקלטה</string>
+    <string name="recording_mode_sum">בחר אילו שיחות להקליט</string>
+    <string name="recording_mode_all">הקלט את כל השיחות</string>
+    <string name="recording_mode_unknown">הקלט מספרים לא ידועים בלבד</string>
+    <string name="recording_mode_include">הקלט רק אנשי קשר נבחרים</string>
+    <string name="recording_mode_exclude">הקלט הכל מלבד נבחרים</string>
+    <string name="recording_included_contacts">אנשי קשר כלולים</string>
+    <string name="recording_excluded_contacts">אנשי קשר שלא נכללו</string>
+    <!-- Search Feature Strings -->
+    <string name="search_features_title">תכונות חיפוש</string>
+    <string name="search_features_hint">חפש כל תכונה...</string>
+    <string name="search_no_results">לא נמצאו תכונות</string>
+    <string name="search_try_different_keywords">נסה מילות מפתח שונות או עיין בקטגוריות</string>
+    <string name="search_start_typing">התחל להקליד כדי לחפש תכונות</string>
+    <string name="no_deleted_messages">לא נמצאו הודעות שנמחקו</string>
+    <string name="deleted_messages_title">נמחק בזכותי</string>
+    <string name="restore_message">שחזר</string>
+    <string name="deleted_messages_sum">הצג הודעות שנמחקו על ידי אחרים</string>
+    <string name="restore_feature_title">תכונת שחזור</string>
+    <string name="restore_feature_desc">"בקרוב!"</string>
+    <string name="action_follow_developer">בקרוב!</string>
+    <string name="enable_spy">הפעל את כלי הריגול</string>
+    <string name="enable_spy_sum">רישום אירועים פנימיים ליומן Xposed לצורך ניפוי שגיאות.</string>
+    <string name="warning_restore">בעת שחזור הגיבוי כל ההודעות לאחר הגיבוי יאבדו, האם אתה בטוח שברצונך להמשיך?</string>
+    <string name="force_restore_backup_experimental">שחזור גיבוי בכפייה (ניסיוני)</string>
+    <string name="contact_probably_not_added">כנראה שה-Contact לא הוסיף אותך!</string>
 </resources>
