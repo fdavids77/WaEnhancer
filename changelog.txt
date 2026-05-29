@@ -1,5 +1,10 @@
 [ADDED]
-* Added support to WA 2.26.15.xx
+* Added new call blocking type: Busy (On another call).
 
-[WAE]
-* Update translations from crowdin
+[REMOVED]
+* Removed the "Rejected" type call blocking, it was not working.
+
+[FIXED]
+* Fixed the Settings icon with profile photo on the home screen (now the camera button also appears)
+* Fixed problem with call blocker for unknown numbers
+* Fixed the logic to hide the ticks
