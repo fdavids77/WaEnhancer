@@ -514,11 +514,13 @@ public class Unobfuscator {
     public synchronized static Method loadFabMethod(ClassLoader classLoader) throws Exception {
         return UnobfuscatorCache.getInstance().getMethod(classLoader, () -> {
             ClassData classData = dexkit.getClassData("com.whatsapp.conversationslist.ConversationsFragment");
-            var result = classData.findMethod(FindMethod.create()
-                    .matcher(MethodMatcher.create().paramCount(0).usingNumbers(200).returnType(int.class)));
-            if (result.isEmpty())
-                throw new Exception("Fab method not found");
-            return result.get(0).getMethodInstance(classLoader);
+            Objects.requireNonNull(classData);
+            for (var clazz : List.of(classData, classData.getSuperClass())) {
+                var result = clazz.findMethod(FindMethod.create()
+                        .matcher(MethodMatcher.create().paramCount(0).usingNumbers(200).returnType(int.class))).firstOrNull();
+                if (result != null)return result.getMethodInstance(classLoader);
+            }
+            throw new Exception("Fab method not found");
         });
     }
 
@@ -2548,14 +2550,9 @@ public class Unobfuscator {
 
     public synchronized static Method loadAdVerifyMethod(ClassLoader classLoader) throws Exception {
         return UnobfuscatorCache.getInstance().getMethod(classLoader, () -> {
-            var clazz = findFirstClassUsingStrings(classLoader, StringMatchType.Contains, "WamoAccountSettingManager");
-            if (clazz == null)
-                throw new ClassNotFoundException("WamoAccountSettingManager Not Found");
-            var method = ReflectionUtils.findMethodUsingFilter(clazz,
-                    method1 -> method1.getParameterCount() == 0 && method1.getReturnType() == boolean.class);
-            if (method == null)
-                throw new NoSuchMethodException("loadAdVerify Not Found");
-            return method;
+            var method = dexkit.findMethod(FindMethod.create().matcher(MethodMatcher.create().usingStrings("is_wfal_paused").paramCount(1))).singleOrNull();
+            if (method == null)throw new NoSuchMethodException("loadAdVerify Not Found");
+            return method.getMethodInstance(classLoader);
         });
     }
 
@@ -2957,5 +2954,18 @@ public class Unobfuscator {
             }
             return null;
         });
+    }
+
+    public static Method loadSeenReceiptForStatus(@NotNull ClassLoader classLoader) throws Exception {
+        return UnobfuscatorCache.getInstance().getMethod(classLoader, ()-> findFirstMethodUsingStrings(classLoader,StringMatchType.Contains,"StatusReceiptStore/insertOrUpdateSeenReceiptForStatus"));
+    }
+
+    public static @Nullable Method loadOnConversationsListChangedMethod(@NonNull ClassLoader classLoader) throws Exception {
+        return UnobfuscatorCache.getInstance().getMethod(classLoader,()-> findFirstMethodUsingStringsFilter(
+                classLoader,
+                "com.whatsapp.conversationslist",
+                StringMatchType.Contains,
+                "onConversationsListChanged"
+        ));
     }
 }

@@ -83,6 +83,7 @@ public class Others extends Feature {
         var animationEmojis = prefs.getBoolean("animation_emojis", false);
         var disableProfileStatus = prefs.getBoolean("disable_profile_status", false);
         var disableExpiration = prefs.getBoolean("disable_expiration", false);
+        var disableAd = prefs.getBoolean("disable_ads", false);
 
         propsInteger.put(3877, oldStatus ? igstatus ? 2 : 0 : 2);
 
@@ -266,6 +267,10 @@ public class Others extends Feature {
             FeatureLoader.disableExpirationVersion(classLoader);
         }
 
+        if (disableAd) {
+            disableAds();
+        }
+
         if (!filterSeen) {
             disableHomeFilters();
         }
@@ -296,6 +301,27 @@ public class Others extends Feature {
         });
     }
 
+    private void disableAds() throws Exception {
+        propsBoolean.put(22904, true);
+        propsBoolean.put(14306, false);
+        try {
+            var loadAd = Unobfuscator.loadAdVerifyMethod(classLoader);
+            XposedBridge.hookMethod(loadAd, new XC_MethodHook() {
+                @Override
+                @SuppressWarnings("unchecked")
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    var enumParam = (Enum) param.args[0];
+                    if (enumParam.name().equals("WAMO")) {
+                        var retClass = (Class<? extends Enum>) ((Method) param.method).getReturnType();
+                        var pauseEnum = Enum.valueOf(retClass, "PAUSED");
+                        param.setResult(pauseEnum);
+                    }
+                }
+            });
+        } catch (Throwable e) {
+            logDebug(e);
+        }
+    }
 
     private void disablePhotoProfileStatus() throws Exception {
         var refreshStatusClass = Unobfuscator.loadRefreshStatusClass(classLoader);
