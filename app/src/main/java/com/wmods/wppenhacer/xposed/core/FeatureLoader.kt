@@ -138,6 +138,7 @@ class FeatureLoader {
 
             Feature.DEBUG = pref.getBoolean("enablelogs", true)
             Utils.xprefs = pref
+            Utils.appClassLoader = loader
 
             XposedHelpers.findAndHookMethod(
                 Instrumentation::class.java, "callApplicationOnCreate", Application::class.java,
@@ -218,9 +219,10 @@ class FeatureLoader {
                 })
 
             XposedHelpers.findAndHookMethod(
-                WppCore.getHomeActivityClass(loader), "onCreate", Bundle::class.java,
+                Activity::class.java, "onCreate", Bundle::class.java,
                 object : XC_MethodHook() {
                     override fun afterHookedMethod(param: MethodHookParam) {
+                        if (param.thisObject.javaClass.simpleName != "HomeActivity")return
                         if (list.isNotEmpty()) {
                             val activity = param.thisObject as Activity
                             val msg = list.joinToString("\n") { "${it.pluginName} - ${it.message}" }
@@ -278,7 +280,7 @@ class FeatureLoader {
             ProtocolTreeNodeWpp.initialize(loader)
             AlertDialogWpp.initDialog(loader)
             WaContactWpp.initialize(loader)
-            WppCore.Initialize(loader, pref)
+            WppCore.initialize(loader, pref)
             DesignUtils.setPrefs(pref)
             Utils.init(loader)
 
