@@ -1,8 +1,6 @@
-[ADDED]
-* Added support for placing text on the clock in any position using [TIME] (WAE -> General -> General -> Text next to Timestamp)
-Ex: 🕧 [TIME]
-
 [FIXED]
-* Fixed compatibility with WA 2.26.21.75
-
-NOTE: Now let's wait for WAEX to copy the commits 😆
+* Fixed an issue in Custom Privacy where the "typing" and "recording" status hiding was not working.
+* Fixed random crashes and also the problem with messages not being sent
+* Fixed the Audio for voice function (Allowing you to upload any audio file as if it were a voice note)
+* Fixed problem with the text next to the Clock (Now you can configure this again)
+* Try to fix the problem with multiple accounts on Whatsapp (Later we will remove the limit of 2 accounts)
