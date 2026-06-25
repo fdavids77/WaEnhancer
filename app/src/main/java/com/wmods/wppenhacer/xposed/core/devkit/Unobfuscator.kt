@@ -4,6 +4,8 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.Bitmap
+import android.graphics.ColorFilter
 import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.hardware.SensorEventListener
@@ -274,25 +276,6 @@ object Unobfuscator {
                 }
             }
             null
-        }
-    }
-
-    @Throws(Exception::class)
-    @JvmStatic
-    fun loadReceiptMainCallerMethod(classLoader: ClassLoader): Method {
-        return UnobfuscatorCache.getInstance().getMethod(classLoader) {
-            val methodReceipt = bridge.getMethodData(loadReceiptMethod(classLoader))
-            val classData = methodReceipt!!.declaredClass
-            val messageInfoClass = loadReceiptMessageInfoClass(classLoader)
-            val methodData = classData!!.findMethod {
-                matcher {
-                    addInvoke(methodReceipt.descriptor)
-                    paramCount(1)
-                    paramTypes(messageInfoClass)
-                    addUsingString("class")
-                }
-            }.single()
-            methodData.getMethodInstance(classLoader)
         }
     }
 
@@ -569,14 +552,17 @@ object Unobfuscator {
             val indiceClass = countMethod.parameterTypes[1]
             val result = bridge.findClass {
                 matcher {
-                    superClass(indiceClass.name)
-                    addMethod {
-                        paramCount(1)
+                    superClass = indiceClass.name
+                    methods {
+                        add {
+                            name = "<init>"
+                            paramCount(1,2)
+                        }
                     }
                 }
             }
-            if (result.isEmpty()) throw Exception("EnableCountTab method not found")
-            result[0].getInstance(classLoader).constructors[0]
+            if (result.isEmpty()) throw Exception("EnableCountTabBadgeWrapper method not found")
+            return@getConstructor result[0].getInstance(classLoader).constructors[0]
         }
     }
 
@@ -1826,14 +1812,6 @@ object Unobfuscator {
         }
     }
 
-    @Throws(Exception::class)
-    @JvmStatic
-    fun loadDefEmojiClass(loader: ClassLoader): Method {
-        return UnobfuscatorCache.getInstance().getMethod(loader) {
-            findFirstMethodUsingStrings(loader, StringMatchType.Contains, "emojis.oba")
-                ?: throw RuntimeException("DefEmoji class not found")
-        }
-    }
 
     @Throws(Exception::class)
     @JvmStatic
@@ -2094,36 +2072,6 @@ object Unobfuscator {
                 "isMuteIndicatorEnabled"
             )
                 ?: throw RuntimeException("NewsletterDataItem class not found")
-        }
-    }
-
-    @Throws(Exception::class)
-    @JvmStatic
-    fun loadTextStatusData(classLoader: ClassLoader): Array<Method> {
-        return UnobfuscatorCache.getInstance().getMethods(classLoader) {
-            var textData: Class<*>?
-            val textDataList = bridge.findClass {
-                matcher {
-                    addUsingString("TextData;")
-                }
-            }
-            textData = if (textDataList.isEmpty()) {
-                findFirstClassUsingName(classLoader, StringMatchType.EndsWith, "TextData")
-            } else {
-                textDataList[0].getInstance(classLoader)
-            }
-            val methods = bridge.findMethod {
-                matcher {
-                    addParamType(textData)
-                }
-            }
-            if (methods.isEmpty()) throw RuntimeException("loadTextStatusData method not found")
-
-            methods.stream().filter { it.isMethod }
-                .map { convertRealMethod(it, classLoader) }
-                .filter { it != null }
-                .map { it!! }
-                .toArray { length -> arrayOfNulls<Method>(length) }
         }
     }
 
@@ -3050,7 +2998,7 @@ object Unobfuscator {
     fun getAllMapFields(clazz: Class<*>): HashMap<String, Field> {
         val cache = UnobfuscatorCache.getInstance()
         val classLoader = clazz.classLoader
-        if (cache != null && classLoader != null) {
+        if (classLoader != null) {
             val cacheKey = "getAllMapFields:" + clazz.name
             return cache.getMapField(classLoader, cacheKey) { buildAllMapFields(clazz) }
         }
@@ -3058,9 +3006,8 @@ object Unobfuscator {
     }
 
     @Throws(Exception::class)
-    private
     @JvmStatic
-    fun buildAllMapFields(clazz: Class<*>): HashMap<String, Field> {
+    private fun buildAllMapFields(clazz: Class<*>): HashMap<String, Field> {
         val methodString = try {
             clazz.getDeclaredMethod("toString")
         } catch (_: Exception) {
@@ -3382,4 +3329,97 @@ object Unobfuscator {
             }.single().getInstance(classLoader)
         }
     }
+
+
+    fun loadOndispatchMessage(classLoader: ClassLoader): Array<Method> {
+        return UnobfuscatorCache.getInstance().getMethods(classLoader){
+            val result = bridge.findMethod {
+                matcher {
+                    usingNumbers(419)
+                    paramCount(1,3)
+                }
+            }.filter { !it.paramTypeNames.isEmpty() && it.paramTypeNames[0].contains("Message") }
+                .map { it.getMethodInstance(classLoader) }.toTypedArray()
+            if (result.isEmpty())return@getMethods null
+            result
+        }
+
+    }
+
+    fun loadLayoutClass(classLoader: ClassLoader): Class<*> {
+        return UnobfuscatorCache.getInstance().getClass(classLoader) {
+            findFirstClassUsingStrings(
+                classLoader,
+                StringMatchType.Contains,
+                "BubbleRelativeLayout/ConversationRowText"
+            )
+                ?: throw RuntimeException("BubbleRelativeLayout class not found")
+        }
+    }
+
+
+    fun loadTextStatusDataClass(classLoader: ClassLoader): Class<*> {
+        return UnobfuscatorCache.getInstance().getClass(classLoader) {
+            val textDataList = bridge.findClass {
+                matcher {
+                    usingStrings("TextData;")
+                }
+            }
+            if (textDataList.isEmpty()) {
+                findFirstClassUsingName(classLoader, StringMatchType.EndsWith, "TextData")
+            } else {
+                textDataList[0].getInstance(classLoader)
+            }
+
+        }
+    }
+
+    fun loadTextStatusComposerOnCreate(classLoader: ClassLoader): Method {
+        return UnobfuscatorCache.getInstance().getMethod(classLoader) {
+            val clazz = findFirstClassUsingName(
+                classLoader,
+                StringMatchType.EndsWith,
+                "TextStatusComposerFragment"
+            )
+            ReflectionUtils.findMethodUsingFilter(clazz) { method ->
+                method.parameterCount == 2 &&
+                        method.parameterTypes[0] === Bundle::class.java &&
+                        method.parameterTypes[1] === View::class.java
+            }
+        }
+    }
+
+    fun loadTextStatusData(classLoader: ClassLoader): Array<Method> {
+        return UnobfuscatorCache.getInstance().getMethods(classLoader) {
+            val textData = loadTextStatusDataClass(classLoader)
+            bridge.findMethod {
+                matcher {
+                    addParamType(textData)
+                }
+            }.filter { it.isMethod }.map { it.getMethodInstance(classLoader) }.toTypedArray()
+        }
+    }
+
+    fun loadTextStatusDataFStatus(classLoader: ClassLoader): Constructor<*> {
+        return UnobfuscatorCache.getInstance().getConstructor(classLoader) {
+            val textData = loadTextStatusDataClass(classLoader)
+            bridge.findMethod {
+                matcher {
+                    paramTypes(textData.name,null,null,null,null,null,null )
+                }
+            }.single().getConstructorInstance(classLoader)
+        }
+    }
+
+    fun loadStickerColoredOutline(classLoader: ClassLoader): Method {
+        return UnobfuscatorCache.getInstance().getMethod(classLoader){
+            bridge.findMethod {
+                matcher {
+                    paramTypes(Bitmap::class.java, ColorFilter::class.java, Float::class.javaPrimitiveType)
+                    returnType(Bitmap::class.java)
+                }
+            }.single().getMethodInstance(classLoader)
+        }
+    }
+
 }

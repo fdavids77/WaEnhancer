@@ -46,7 +46,6 @@ class WppXposed : IXposedHookLoadPackage, IXposedHookInitPackageResources, IXpos
         }
     }
 
-    @SuppressLint("WorldReadableFiles")
     @Throws(Throwable::class)
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
         val packageName = lpparam.packageName
@@ -59,13 +58,18 @@ class WppXposed : IXposedHookLoadPackage, IXposedHookInitPackageResources, IXpos
                 "isXposedEnabled",
                 XC_MethodReplacement.returnConstant(true)
             )
+
             @Suppress("DEPRECATION")
+            @SuppressLint("WorldReadableFiles")
             XposedHelpers.findAndHookMethod(
                 PreferenceManager::class.java.name,
                 classLoader,
                 "getDefaultSharedPreferencesMode",
                 XC_MethodReplacement.returnConstant(ContextWrapper.MODE_WORLD_READABLE)
             )
+
+            XposedHelpers.findAndHookMethod(
+                "android.app.ContextImpl", classLoader, "checkMode", Int::class.javaPrimitiveType!!, XC_MethodReplacement.DO_NOTHING)
             return
         }
 
@@ -75,7 +79,7 @@ class WppXposed : IXposedHookLoadPackage, IXposedHookInitPackageResources, IXpos
 
         ScopeHook.hook(lpparam)
 
-        if ((FeatureLoader.isWppOrClone(packageName) && App.isOriginalPackage()) || packageName == FeatureLoader.PACKAGE_BUSINESS) {
+        if ((FeatureLoader.isWppOrClone(packageName) && App.isOriginalPackage) || packageName == FeatureLoader.PACKAGE_BUSINESS) {
             if (lpparam.isFirstApplication) { // I believe this may fix the problem when using multiple accounts, not yet tested
                 XposedBridge.log("[•] This package: ${lpparam.packageName}")
                 FeatureLoader.start(classLoader, getPref(), lpparam.appInfo.sourceDir)

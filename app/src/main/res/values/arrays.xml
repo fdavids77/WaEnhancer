@@ -164,24 +164,20 @@
         <item>2</item>
     </string-array>
     <string-array name="supported_versions_wpp">
-        <item>2.26.14.xx</item>
-        <item>2.26.15.xx</item>
-        <item>2.26.16.xx</item>
-        <item>2.26.17.xx</item>
         <item>2.26.18.xx</item>
         <item>2.26.19.xx</item>
         <item>2.26.20.xx</item>
         <item>2.26.21.xx</item>
+        <item>2.26.22.xx</item>
+        <item>2.26.23.xx</item>
     </string-array>
     <string-array name="supported_versions_business">
-        <item>2.26.14.xx</item>
-        <item>2.26.15.xx</item>
-        <item>2.26.16.xx</item>
-        <item>2.26.17.xx</item>
         <item>2.26.18.xx</item>
         <item>2.26.19.xx</item>
         <item>2.26.20.xx</item>
         <item>2.26.21.xx</item>
+        <item>2.26.22.xx</item>
+        <item>2.26.23.xx</item>
     </string-array>
     <string-array name="image_picker">
         <item>image/*</item>
@@ -239,5 +235,16 @@
         <item>0</item>
         <item>1</item>
         <item>2</item>
+    </string-array>
+    <string-array name="configui_entries">
+        <item>@string/configui_mode_default</item>
+        <item>@string/configui_mode_toolbar_photo</item>
+        <item>@string/configui_mode_you_tab</item>
+    </string-array>
+
+    <string-array name="configui_values">
+        <item>0</item>
+        <item>2</item>
+        <item>6</item>
     </string-array>
 </resources>

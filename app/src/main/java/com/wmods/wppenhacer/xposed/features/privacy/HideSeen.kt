@@ -10,6 +10,7 @@ import com.wmods.wppenhacer.xposed.core.components.ProtocolTreeNodeWpp
 import com.wmods.wppenhacer.xposed.core.db.MessageHistoryStore
 import com.wmods.wppenhacer.xposed.core.devkit.Unobfuscator
 import com.wmods.wppenhacer.xposed.features.general.Others
+import com.wmods.wppenhacer.xposed.utils.ReflectionUtils
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XSharedPreferences
 import de.robv.android.xposed.XposedBridge
@@ -145,37 +146,41 @@ class HideSeen(loader: ClassLoader, preferences: XSharedPreferences) :
 
     private fun hookReceiptMethod() {
 
-        val inManualReceiptCheck = ThreadLocal<Boolean>()
         val receiptMethod = Unobfuscator.loadReceiptMethod(classLoader)
-        val receiptMainCallerMethod = Unobfuscator.loadReceiptMainCallerMethod(classLoader)
         val receiptMessageInfoClass = Unobfuscator.loadReceiptMessageInfoClass(classLoader)
-        XposedHelpers.findAndHookMethod(
-            Message::class.java,
-            "obtain",
-            Handler::class.java,
-            Int::class.javaPrimitiveType!!,
-            Int::class.javaPrimitiveType!!,
-            Int::class.javaPrimitiveType!!,
-            Any::class.javaObjectType,
-            object : XC_MethodHook() {
+        val onDispatchMessage = Unobfuscator.loadOndispatchMessage(classLoader)
 
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    val type = param.args[2]
-                    val obj = param.args[4]
-                    if (type != 419 && type != 89) return
-                    if (!receiptMessageInfoClass.isInstance(obj)) return
-                    inManualReceiptCheck.set(true)
-                    // We check if the message is duplicated to avoid sending a tick twice causing congestion in the IQ queue
-                    val checkResult = try {
-                        receiptMainCallerMethod.invoke(null, obj)
-                    } finally {
-                        inManualReceiptCheck.set(false)
+        onDispatchMessage.forEach { method ->
+            XposedBridge.hookMethod(
+                method,
+                object : XC_MethodHook() {
+
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val message = param.args[0] as Message
+                        val type = message.arg1
+                        val obj = message.obj
+                        if (type != 419 && type != 89) return
+                        if (!receiptMessageInfoClass.isInstance(obj)) return
+                        // We check if the message is duplicated to avoid sending a tick twice causing congestion in the IQ queue
+                        val fmessageKeyField = ReflectionUtils.findFieldUsingFilter(obj.javaClass){
+                            FMessageWpp.Key.TYPE.isAssignableFrom(it.type)
+                        }
+                        val fmessageKey = FMessageWpp.Key(fmessageKeyField.get(obj))
+                        val hideSeenItem = MessageHistoryStore.getInstance().getHideSeenMessage(
+                            fmessageKey.remoteJid.phoneRawString,
+                            fmessageKey.messageID,
+                            MessageHistoryStore.ReceiptType.READ
+                        )
+
+                        if (hideSeenItem?.viewed ?: false) return
+
+                        hideSeenItem?.let {
+                            message.arg1 = -1 // We change the type [IMPORTANT]IA Agent use 9 for best work[/IMPORTANT]
+                            return
+                        }
                     }
-                    if (checkResult == null) {
-                        param.args[2] = -1 // We change the type [IMPORTANT]IA Agent use 9 for best work[/IMPORTANT]
-                    }
-                }
-            })
+                })
+        }
 
 
         Others.propsBoolean[19148] = false // Change route IQ
@@ -192,6 +197,8 @@ class HideSeen(loader: ClassLoader, preferences: XSharedPreferences) :
 
                 val fmessageKey = generateFMessageKey(protocolTreeNodeWpp) ?: return
 
+                if (fmessageKey.remoteJid.isStatus)return
+
                 val hideSeenItem = MessageHistoryStore.getInstance().getHideSeenMessage(
                     fmessageKey.remoteJid.phoneRawString,
                     fmessageKey.messageID,
@@ -199,11 +206,6 @@ class HideSeen(loader: ClassLoader, preferences: XSharedPreferences) :
                 )
 
                 if (hideSeenItem?.viewed ?: false) return
-
-                hideSeenItem?.let {
-                    param.result = null
-                    return
-                }
 
                 val hideSeen = checkPrivacyAndHideSeen(fmessageKey)
                 val hideReceipt = checkPrivacyAndHideReceipt(fmessageKey)
@@ -219,8 +221,6 @@ class HideSeen(loader: ClassLoader, preferences: XSharedPreferences) :
                     protocolTreeNodeWpp.removeAllKeyValuesByKey("sts")
                     protocolTreeNodeWpp.removeAllKeyValuesByKey("type")
                 }
-
-                if (inManualReceiptCheck.get() ?: false) return
 
                 if (hideReceipt || hideSeen) {
                     MessageHistoryStore.getInstance().insertHideSeenMessage(

@@ -84,8 +84,6 @@ class SeparateGroup(loader: ClassLoader, preferences: XSharedPreferences) :
     }
 
     override fun doHook() {
-        if (!prefs.getBoolean("separategroups", false)) return
-
         val bottomNavigationViewCls = Unobfuscator.findFirstClassUsingName(
             classLoader,
             StringMatchType.EndsWith,
@@ -94,8 +92,10 @@ class SeparateGroup(loader: ClassLoader, preferences: XSharedPreferences) :
         XposedHelpers.findAndHookMethod(
             bottomNavigationViewCls,
             "getMaxItemCount",
-            XC_MethodReplacement.returnConstant(6)
+            XC_MethodReplacement.returnConstant(99)
         )
+
+        if (!prefs.getBoolean("separategroups", false)) return
 
         // Modifying tab list order
         hookTabList()
@@ -136,42 +136,15 @@ class SeparateGroup(loader: ClassLoader, preferences: XSharedPreferences) :
                 param.result = null
 
                 CoroutineScope(Dispatchers.IO + WaeCoroutineExceptionHandler).launch {
-                    var chatCount = 0
-                    var groupCount = 0
-                    val db = MessageStore.getInstance().getDatabase()
-                    val sql = "SELECT * FROM chat WHERE unseen_message_count != 0"
-                    db?.rawQuery(sql, null)?.use { cursor ->
-                        while (cursor.moveToNext()) {
-                            val jid = cursor.getInt(cursor.getColumnIndex("jid_row_id"))
-                            val groupType = cursor.getInt(cursor.getColumnIndex("group_type"))
-                            val archived = cursor.getInt(cursor.getColumnIndex("archived"))
-                            val chatLocked = cursor.getInt(cursor.getColumnIndex("chat_lock"))
-                            if (archived != 0 || (groupType != 0 && groupType != 6) || chatLocked != 0) {
-                                continue
-                            }
-                            val sql2 = "SELECT * FROM jid WHERE _id == ?"
-                            db.rawQuery(sql2, arrayOf(jid.toString())).use { cursor1 ->
-                                if (!cursor1.moveToFirst()) continue
-                                val server = cursor1.getString(cursor1.getColumnIndex("server"))
-                                if (server == "g.us") {
-                                    groupCount++
-                                } else {
-                                    chatCount++
-                                }
-                            }
-                        }
-
-                    }
+                    val unseenChatCounts = getUnseenChatCounts()
                     withContext(Dispatchers.Main) {
                         if (tabs.contains(CHATS) && tabInstances.containsKey(CHATS)) {
-                            val chatsBadge = if (chatCount <= 0) {
+                            val chatsBadge = if (unseenChatCounts.chatCount <= 0) {
                                 XposedHelpers.getStaticObjectField(emptyBadgeClass, "A00")
                             } else {
-                                badgeWrapperConstructor.newInstance(
-                                    badgeItemConstructor.newInstance(
-                                        chatCount
-                                    )
-                                )
+                                val params = ReflectionUtils.initArray(badgeWrapperConstructor.parameterTypes)
+                                params[0] = badgeItemConstructor.newInstance(unseenChatCounts.chatCount)
+                                badgeWrapperConstructor.newInstance(*params)
                             }
                             XposedBridge.invokeOriginalMethod(
                                 param.method,
@@ -180,14 +153,14 @@ class SeparateGroup(loader: ClassLoader, preferences: XSharedPreferences) :
                             )
                         }
                         if (tabs.contains(GROUPS) && tabInstances.containsKey(GROUPS)) {
-                            val chatsBadge = if (groupCount <= 0) {
+                            val chatsBadge = if (unseenChatCounts.groupCount <= 0) {
                                 XposedHelpers.getStaticObjectField(emptyBadgeClass, "A00")
                             } else {
-                                badgeWrapperConstructor.newInstance(
-                                    badgeItemConstructor.newInstance(
-                                        groupCount
-                                    )
+                                val params = ReflectionUtils.initArray(badgeWrapperConstructor.parameterTypes)
+                                params[0] = badgeItemConstructor.newInstance(
+                                    unseenChatCounts.groupCount
                                 )
+                                badgeWrapperConstructor.newInstance(*params)
                             }
                             XposedBridge.invokeOriginalMethod(
                                 param.method,
@@ -199,6 +172,34 @@ class SeparateGroup(loader: ClassLoader, preferences: XSharedPreferences) :
                 }
             }
         })
+    }
+
+    fun getUnseenChatCounts(): UnseenChatCounts {
+        val db = MessageStore.getInstance().getDatabase()
+            ?: return UnseenChatCounts(chatCount = 0, groupCount = 0)
+
+        val sql = """
+        SELECT
+            COALESCE(SUM(CASE WHEN jid.server = ? THEN 0 ELSE 1 END), 0) AS chat_count,
+            COALESCE(SUM(CASE WHEN jid.server = ? THEN 1 ELSE 0 END), 0) AS group_count
+        FROM chat
+        INNER JOIN jid ON jid._id = chat.jid_row_id
+        WHERE chat.unseen_message_count <> 0
+          AND chat.archived = 0
+          AND chat.chat_lock = 0
+          AND (chat.group_type = 0 OR chat.group_type = 6)
+        """.trimIndent()
+
+        db.rawQuery(sql, arrayOf("g.us", "g.us")).use { cursor ->
+            if (!cursor.moveToFirst()) {
+                return UnseenChatCounts(chatCount = 0, groupCount = 0)
+            }
+
+            return UnseenChatCounts(
+                chatCount = cursor.getInt(cursor.getColumnIndexOrThrow("chat_count")),
+                groupCount = cursor.getInt(cursor.getColumnIndexOrThrow("group_count"))
+            )
+        }
     }
 
     private fun hookTabIcon() {
@@ -344,7 +345,7 @@ class SeparateGroup(loader: ClassLoader, preferences: XSharedPreferences) :
                     BaseAdapter::class.java
                 ) ?: return
                 val convField = ReflectionUtils.getFieldByType(baseField.type, cFragClass)
-                val thiz = convField.get(baseField.get(param.thisObject)) ?: return
+                val thiz = convField!!.get(baseField.get(param.thisObject)) ?: return
                 val resultList = filterChat(thiz, chatsList)
                 XposedHelpers.setObjectField(filters, "values", resultList)
                 XposedHelpers.setIntField(filters, "count", resultList.size)
@@ -364,8 +365,9 @@ class SeparateGroup(loader: ClassLoader, preferences: XSharedPreferences) :
             { userJid ->
                 if (tabGroup == thiz)
                     userJid.isGroup || userJid.isBroadcast
-                else
+                else {
                     userJid.isContact
+                }
             },
             false
         )
@@ -432,4 +434,10 @@ class SeparateGroup(loader: ClassLoader, preferences: XSharedPreferences) :
             return filter.test(userJid)
         }
     }
+
+    data class UnseenChatCounts(
+        val chatCount: Int,
+        val groupCount: Int
+    )
+
 }

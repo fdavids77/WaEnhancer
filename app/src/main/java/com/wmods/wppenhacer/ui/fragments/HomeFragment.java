@@ -35,6 +35,8 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+ import java.net.UnknownHostException;
+
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -42,6 +44,10 @@ import java.util.Date;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
+
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
 
 import rikka.core.util.IOUtils;
 
@@ -77,13 +83,13 @@ public class HomeFragment extends BaseFragment {
 
         binding.rebootBtn.setOnClickListener(view -> {
             animateClick(view);
-            App.getInstance().restartApp(FeatureLoader.PACKAGE_WPP);
+            App.instance.restartApp(FeatureLoader.PACKAGE_WPP);
             disableWpp(requireActivity());
         });
 
         binding.rebootBtn2.setOnClickListener(view -> {
             animateClick(view);
-            App.getInstance().restartApp(FeatureLoader.PACKAGE_BUSINESS);
+            App.instance.restartApp(FeatureLoader.PACKAGE_BUSINESS);
             disableBusiness(requireActivity());
         });
 
@@ -102,30 +108,48 @@ public class HomeFragment extends BaseFragment {
             resetConfigs(this.getContext());
         });
 
+        binding.updateCard.setOnClickListener(view -> {
+            animateClick(view);
+            Utils.openLink(requireActivity(), "https://t.me/waenhancher");
+        });
+
+        checkForUpdates();
+
         startCardAnimations();
 
         return binding.getRoot();
     }
 
     private void startCardAnimations() {
-        var slideUp = AnimationUtils.loadAnimation(getContext(), R.anim.slide_up);
-        var fadeIn = AnimationUtils.loadAnimation(getContext(), R.anim.fade_in);
+        var context = getContext();
+        if (context == null) return;
+        var slideUp = AnimationUtils.loadAnimation(context, R.anim.slide_up);
+        var fadeIn = AnimationUtils.loadAnimation(context, R.anim.fade_in);
 
         binding.status.startAnimation(slideUp);
 
         binding.status2.postDelayed(() -> {
-            var anim = AnimationUtils.loadAnimation(getContext(), R.anim.slide_up);
+            if (!isAdded() || binding == null) return;
+            var anim = AnimationUtils.loadAnimation(requireContext(), R.anim.slide_up);
             binding.status2.startAnimation(anim);
         }, 100);
 
         binding.status3.postDelayed(() -> {
-            var anim = AnimationUtils.loadAnimation(getContext(), R.anim.slide_up);
+            if (!isAdded() || binding == null) return;
+            var anim = AnimationUtils.loadAnimation(requireContext(), R.anim.slide_up);
             binding.status3.startAnimation(anim);
         }, 200);
 
         binding.infoCard.postDelayed(() -> {
+            if (!isAdded() || binding == null) return;
             binding.infoCard.startAnimation(fadeIn);
         }, 300);
+
+        binding.updateCard.postDelayed(() -> {
+            if (!isAdded() || binding == null) return;
+            var anim = AnimationUtils.loadAnimation(requireContext(), R.anim.slide_up);
+            binding.updateCard.startAnimation(anim);
+        }, 400);
     }
 
     private void animateClick(View view) {
@@ -141,6 +165,7 @@ public class HomeFragment extends BaseFragment {
 
     @SuppressLint("StringFormatInvalid")
     private void receiverBroadcastBusiness(Context context, Intent intent) {
+        if (App.isOriginalPackage()) binding.status3.setVisibility(View.VISIBLE);
         binding.statusTitle3.setText(R.string.business_in_background);
         var version = intent.getStringExtra("VERSION");
         var supported_list = Arrays.asList(context.getResources().getStringArray(R.array.supported_versions_business));
@@ -177,8 +202,8 @@ public class HomeFragment extends BaseFragment {
     private void resetConfigs(Context context) {
         var prefs = PreferenceManager.getDefaultSharedPreferences(context);
         prefs.getAll().forEach((key, value) -> prefs.edit().remove(key).apply());
-        App.getInstance().restartApp(FeatureLoader.PACKAGE_WPP);
-        App.getInstance().restartApp(FeatureLoader.PACKAGE_BUSINESS);
+        App.instance.restartApp(FeatureLoader.PACKAGE_WPP);
+        App.instance.restartApp(FeatureLoader.PACKAGE_BUSINESS);
         Utils.showToast(context.getString(R.string.configs_reset), Toast.LENGTH_SHORT);
     }
 
@@ -257,8 +282,8 @@ public class HomeFragment extends BaseFragment {
                     }
                 }
                 Toast.makeText(context, context.getString(R.string.configs_imported), Toast.LENGTH_SHORT).show();
-                App.getInstance().restartApp(FeatureLoader.PACKAGE_WPP);
-                App.getInstance().restartApp(FeatureLoader.PACKAGE_BUSINESS);
+                App.instance.restartApp(FeatureLoader.PACKAGE_WPP);
+                App.instance.restartApp(FeatureLoader.PACKAGE_BUSINESS);
             } catch (Exception e) {
                 Log.e("importConfigs", e.getMessage(), e);
                 Toast.makeText(context, e.getMessage(), Toast.LENGTH_SHORT).show();
@@ -286,12 +311,8 @@ public class HomeFragment extends BaseFragment {
         } else {
             binding.status2.setVisibility(View.GONE);
         }
-
-        if (isInstalled(FeatureLoader.PACKAGE_BUSINESS)) {
-            disableBusiness(activity);
-        } else {
+        if (App.isOriginalPackage())
             binding.status3.setVisibility(View.GONE);
-        }
         checkWpp(activity);
         binding.deviceName.setText(Build.MANUFACTURER);
         binding.sdk.setText(String.valueOf(Build.VERSION.SDK_INT));
@@ -307,7 +328,7 @@ public class HomeFragment extends BaseFragment {
 
     private boolean isInstalled(String packageWpp) {
         try {
-            App.getInstance().getPackageManager().getPackageInfo(packageWpp, 0);
+            App.instance.getPackageManager().getPackageInfo(packageWpp, 0);
             return true;
         } catch (Exception ignored) {
         }
@@ -333,6 +354,79 @@ public class HomeFragment extends BaseFragment {
     private static void checkWpp(FragmentActivity activity) {
         Intent checkWpp = new Intent(BuildConfig.APPLICATION_ID + ".CHECK_WPP");
         activity.sendBroadcast(checkWpp);
+    }
+
+    private void checkForUpdates() {
+        var context = getContext();
+        if (context == null) return;
+
+        binding.updateSummary.setText(getString(R.string.current_version_s, BuildConfig.VERSION_NAME));
+
+        new Thread(() -> {
+            try {
+                var client = new OkHttpClient.Builder()
+                        .connectTimeout(10, TimeUnit.SECONDS)
+                        .readTimeout(10, TimeUnit.SECONDS)
+                        .build();
+
+                var request = new Request.Builder()
+                        .url("https://api.github.com/repos/Dev4Mod/WaEnhancer/releases/latest")
+                        .build();
+
+                try (var response = client.newCall(request).execute()) {
+                    if (!response.isSuccessful()) {
+                        updateCardState(false, false, null);
+                        return;
+                    }
+
+                    var body = response.body();
+
+                    var content = body.string();
+                    var release = new JSONObject(content);
+                    var tagName = release.optString("tag_name", "");
+
+                    if (tagName.isBlank()) {
+                        updateCardState(true, true, null);
+                        return;
+                    }
+
+                    var hash = tagName.split("-")[1].trim();
+                    var isNewVersion = !BuildConfig.VERSION_NAME.toLowerCase().contains(hash.toLowerCase());
+
+                    updateCardState(true, !isNewVersion, tagName);
+                }
+            } catch (UnknownHostException e) {
+                updateCardState(false, false, null);
+            } catch (Exception e) {
+                updateCardState(false, false, null);
+            }
+        }).start();
+    }
+
+    private void updateCardState(boolean success, boolean isUpToDate, @Nullable String newVersion) {
+        var activity = getActivity();
+        if (activity == null || !isAdded()) return;
+
+        activity.runOnUiThread(() -> {
+            if (binding == null) return;
+
+            if (!success) {
+                binding.updateIcon.setImageResource(R.drawable.ic_round_error_outline_24);
+                binding.updateTitle.setText(R.string.update_check_failed);
+                binding.updateSummary.setText(R.string.update_check_failed_summary);
+                binding.updateCard.getChildAt(0).setBackgroundResource(R.drawable.gradient_warning);
+            } else if (isUpToDate) {
+                binding.updateIcon.setImageResource(R.drawable.ic_round_check_circle_24);
+                binding.updateTitle.setText(R.string.up_to_date);
+                binding.updateSummary.setText(getString(R.string.current_version_s, BuildConfig.VERSION_NAME));
+                binding.updateCard.getChildAt(0).setBackgroundResource(R.drawable.gradient_success);
+            } else {
+                binding.updateIcon.setImageResource(R.drawable.ic_round_update_24);
+                binding.updateTitle.setText(R.string.update_available);
+                binding.updateSummary.setText(getString(R.string.update_available_summary, newVersion));
+                binding.updateCard.getChildAt(0).setBackgroundResource(R.drawable.gradient_update);
+            }
+        });
     }
 
     @Override

@@ -50,7 +50,6 @@ import com.wmods.wppenhacer.xposed.features.general.LiteMode
 import com.wmods.wppenhacer.xposed.features.general.NewChat
 import com.wmods.wppenhacer.xposed.features.general.Others
 import com.wmods.wppenhacer.xposed.features.general.PinnedLimit
-import com.wmods.wppenhacer.xposed.features.general.RecoverDeleteForMe
 import com.wmods.wppenhacer.xposed.features.general.SeenTick
 import com.wmods.wppenhacer.xposed.features.general.ShareLimit
 import com.wmods.wppenhacer.xposed.features.general.WebWhatsAppLink
@@ -334,7 +333,7 @@ class FeatureLoader {
             WaContactWpp.initialize(loader)
             WppCore.initialize(loader, pref)
             DesignUtils.setPrefs(pref)
-            Utils.init(loader)
+            Utils.init()
 
             WppCore.addListenerActivity(object : WppCore.ActivityChangeState {
                 override fun onChange(
@@ -349,7 +348,7 @@ class FeatureLoader {
                         checkPrefsLoad(pref, activity)
                     }
 
-                    if (App.isOriginalPackage() && pref.getBoolean("update_check", true)) {
+                    if (App.isOriginalPackage && pref.getBoolean("update_check", true)) {
                         if (activity.javaClass.simpleName == "HomeActivity" && type == WppCore.ActivityChangeState.ChangeType.RESUMED) {
                             if (pref.getBoolean("lite_mode",false)) return
                             activity.window.decorView.postDelayed({
@@ -532,7 +531,6 @@ class FeatureLoader {
                 LockedChatsEnhancer::class.java,
                 CallRecording::class.java,
                 BackupRestore::class.java,
-                RecoverDeleteForMe::class.java,
                 JumpFirstMessage::class.java,
                 AboutContactPicker::class.java,
                 WebWhatsAppLink::class.java
