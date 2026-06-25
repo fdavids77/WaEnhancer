@@ -18,7 +18,7 @@ object AntiUpdater {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     val session = param.args[0] as PackageInstaller.SessionParams?
                     val packageName = XposedHelpers.getObjectField(session, "mPackageName")
-                    if (packageName == FeatureLoader.PACKAGE_WPP || packageName == FeatureLoader.PACKAGE_BUSINESS) {
+                    if (FeatureLoader.isWhatsAppPackage(packageName as String)) {
                         param.setThrowable(IOException("UPDATE LOCKED BY WAENHANCER"))
                     }
                 }
