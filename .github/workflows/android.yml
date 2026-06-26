@@ -34,22 +34,18 @@ jobs:
             echo "${{ secrets.KEY_STORE }}" | base64 --decode > key.jks
           fi
 
-      - name: Build
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleWhatsappDebug assembleBusinessDebug -Pminify=true
-
-      - name: Upload WhatsApp APK
+    - name: Upload WhatsApp APK
         uses: actions/upload-artifact@v4
         with:
           name: WaEnhancer-WhatsApp
-          path: app/build/outputs/apk/whatsapp/debug/app-whatsapp-debug.apk
+          # The ** will match any flavor folder name regardless of capitalization
+          path: app/build/outputs/apk/**/debug/*.apk 
 
       - name: Upload Business APK
         uses: actions/upload-artifact@v4
         with:
           name: WaEnhancer-Business
-          path: app/build/outputs/apk/business/debug/app-business-debug.apk
+          path: app/build/outputs/apk/**/debug/*.apk
 
       - name: Release
         if: github.event_name != 'pull_request'
@@ -59,5 +55,4 @@ jobs:
           name: "WaEnhancer ${{ github.sha }}"
           tag_name: "debug-${{ github.sha }}"
           files: |
-            app/build/outputs/apk/whatsapp/debug/app-whatsapp-debug.apk
-            app/build/outputs/apk/business/debug/app-business-debug.apk
+            app/build/outputs/apk/**/debug/*.apk
