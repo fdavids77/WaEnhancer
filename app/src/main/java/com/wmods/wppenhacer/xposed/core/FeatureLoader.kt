@@ -128,6 +128,23 @@ class FeatureLoader {
             return packageName == PACKAGE_WPP || packageName.startsWith(CLONE_PREFIX)
         }
 
+        /**
+         * Compares two dotted version strings numerically.
+         * Returns >0 if v1 > v2, 0 if equal, <0 if v1 < v2.
+         * Non-numeric / missing segments are treated as 0.
+         */
+        @JvmStatic
+        fun compareVersions(v1: String, v2: String): Int {
+            val p1 = v1.split(".").map { it.toIntOrNull() ?: 0 }
+            val p2 = v2.split(".").map { it.toIntOrNull() ?: 0 }
+            for (i in 0 until maxOf(p1.size, p2.size)) {
+                val a = p1.getOrElse(i) { 0 }
+                val b = p2.getOrElse(i) { 0 }
+                if (a != b) return a.compareTo(b)
+            }
+            return 0
+        }
+
         private val list = ArrayList<ErrorItem>()
         private var supportedVersions: List<String>? = null
         private var currentVersion: String? = null
@@ -181,9 +198,14 @@ class FeatureLoader {
                             SharedPreferencesWrapper.hookInit(application.classLoader)
                             ReflectionUtils.initCache(application)
 
-                            val isSupported = supportedVersions?.any { s ->
-                                packageInfo.versionName?.startsWith(s.replace(".xx", "")) ?: false
-                            } ?: false
+                            // Range-based check: accept any version >= the minimum supported
+                            // version, instead of whitelisting exact minor versions.
+                            val currentVer = packageInfo.versionName
+                            val minVersion = supportedVersions
+                                ?.map { it.replace(".xx", "") }
+                                ?.minWithOrNull(::compareVersions)
+                            val isSupported = currentVer != null && minVersion != null &&
+                                    compareVersions(currentVer, minVersion) >= 0
 
                             if (!isSupported) {
                                 disableExpirationVersion(application.classLoader)
