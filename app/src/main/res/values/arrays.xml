@@ -187,6 +187,7 @@
         <item>2</item>
     </string-array>
 
+
     <string-array name="image_picker">
         <item>image/*</item>
     </string-array>
