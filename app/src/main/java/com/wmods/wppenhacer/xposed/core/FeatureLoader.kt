@@ -50,7 +50,6 @@ import com.wmods.wppenhacer.xposed.features.general.AntiRevoke
 import com.wmods.wppenhacer.xposed.features.general.CallType
 import com.wmods.wppenhacer.xposed.features.general.ChatLimit
 import com.wmods.wppenhacer.xposed.features.general.DeleteStatus
-import com.wmods.wppenhacer.xposed.features.general.LiteMode
 import com.wmods.wppenhacer.xposed.features.general.NewChat
 import com.wmods.wppenhacer.xposed.features.general.Others
 import com.wmods.wppenhacer.xposed.features.general.PinnedLimit
@@ -381,7 +380,6 @@ class FeatureLoader {
 
                     if (App.isOriginalPackage && pref.getBoolean("update_check", true)) {
                         if (activity.javaClass.simpleName == "HomeActivity" && type == WppCore.ActivityChangeState.ChangeType.RESUMED) {
-                            if (pref.getBoolean("lite_mode",false)) return
                             activity.window.decorView.postDelayed({
                                 CompletableFuture.runAsync(UpdateChecker(activity))
                             }, 2000)
@@ -513,7 +511,6 @@ class FeatureLoader {
                 TagMessage::class.java,
                 HideTabs::class.java,
                 IGStatus::class.java,
-                LiteMode::class.java,
                 MediaQuality::class.java,
                 NewChat::class.java,
                 Others::class.java,
