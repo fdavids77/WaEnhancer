@@ -493,6 +493,10 @@
     <string name="web_whatsapp_link_sum">Replace QR scanner with web.whatsapp.com WebView. Enables device linking on cloned/renamed packages using web protocol (BASIC integrity only).</string>
     <string name="jump_first_message">Jump to First Message</string>
     <string name="jump_first_message_sum">Add a button to skip the first message in the conversations screen</string>
+    <string name="copy_selection_message_title">Copy Message Selection</string>
+    <string name="copy_selection_message_sum">Add a button to select and copy a specific part of a message</string>
+    <string name="copy_selection_action">✂ Copy Selection</string>
+    <string name="copy_selection_dialog_title">Copy Text</string>
     <string name="picker_loading_contacts">Loading contacts…</string>
     <string name="mode_all">All</string>
     <string name="picker_contacts">Contacts</string>
