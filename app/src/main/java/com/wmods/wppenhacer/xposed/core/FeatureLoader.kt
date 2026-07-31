@@ -570,7 +570,7 @@ class FeatureLoader {
                 BackupRestore::class.java,
                 JumpFirstMessage::class.java,
                 AboutContactPicker::class.java,
-                WebWhatsAppLink::class.java,
+                // WebWhatsAppLink::class.java,  // constructor type mismatch; unused
                 DefaultEmoji::class.java
             )
 

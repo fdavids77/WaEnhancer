@@ -238,7 +238,7 @@ class Others(loader: ClassLoader, preferences:SharedPreferences) : Feature(loade
             }
         }
 
-        customPlayBackSpeed()
+        // customPlayBackSpeed()  // loadPlaybackSpeed strings missing in 2.26.29; unused
 
         showOnline(showOnline)
 
