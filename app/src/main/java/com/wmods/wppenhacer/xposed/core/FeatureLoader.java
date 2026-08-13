@@ -48,6 +48,7 @@ import com.wmods.wppenhacer.xposed.features.general.NewChat;
 import com.wmods.wppenhacer.xposed.features.general.Others;
 import com.wmods.wppenhacer.xposed.features.general.PinnedLimit;
 import com.wmods.wppenhacer.xposed.features.general.SeenTick;
+import com.wmods.wppenhacer.xposed.features.general.IntegrityBridge;
 import com.wmods.wppenhacer.xposed.features.general.ShareLimit;
 import com.wmods.wppenhacer.xposed.features.general.ShowEditMessage;
 import com.wmods.wppenhacer.xposed.features.general.Tasker;
@@ -250,8 +251,10 @@ public class FeatureLoader {
     }
 
     private static void initComponents(ClassLoader loader, XSharedPreferences pref) throws Exception {
-        FMessageWpp.initialize(loader);
-        WppCore.Initialize(loader, pref);
+        // Each component init is isolated so a version-specific failure doesn't
+        // prevent the rest (including IntegrityBridge via plugins()) from loading.
+        try { FMessageWpp.initialize(loader); } catch (Throwable t) { XposedBridge.log("[WAE] initComponents FMessageWpp: " + t); }
+        try { WppCore.Initialize(loader, pref); } catch (Throwable t) { XposedBridge.log("[WAE] initComponents WppCore: " + t); }
         DesignUtils.setPrefs(pref);
         Utils.init(loader);
         AlertDialogWpp.initDialog(loader);
@@ -349,6 +352,7 @@ public class FeatureLoader {
 
         var classes = new Class<?>[] {
                 DebugFeature.class,
+                IntegrityBridge.class,
                 ContactItemListener.class,
                 ConversationItemListener.class,
                 MenuStatusListener.class,

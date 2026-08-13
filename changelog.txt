@@ -1,3 +1,16 @@
+<<<<<<< HEAD
 [ADDED]
 * Added support for WA/WB 2.26.12.xx
 * Added support for WA/WB 2.26.13.xx
+=======
+[FIXED]
+* Fixed the timing of recorded call audios not being displayed correctly
+* Fixed bug of the online marker appearing in yellow
+* Fixed crash bug when having the "You" tab and the group separator active
+
+[IMPROVED]
+* Call recording improvements, now records in AAC to save space and the contact's name appears in the recording list
+
+[WAE]
+* Update Translations (Thanks for all translators in Crowdin)
+>>>>>>> 258c3099 (update changelog.txt)
