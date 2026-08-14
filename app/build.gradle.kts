@@ -181,6 +181,7 @@ dependencies {
     compileOnly(libs.lombok)
     annotationProcessor(libs.lombok)
     implementation(libs.markwon.core)
+    implementation(libs.play.integrity)
 }
 
 configurations.all {
