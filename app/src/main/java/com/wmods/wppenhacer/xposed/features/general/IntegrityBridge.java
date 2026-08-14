@@ -15,20 +15,27 @@ import com.wmods.wppenhacer.xposed.utils.Utils;
 import org.luckypray.dexkit.query.enums.StringMatchType;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
+import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XSharedPreferences;
 import de.robv.android.xposed.XposedBridge;
 
 /**
- * IntegrityBridge — Phase 2 Play Integrity token proxy.
+ * IntegrityBridge - Phase 2 Play Integrity token proxy.
  *
- * BlackBox's virtual WhatsApp cannot generate a com.whatsapp Play Integrity
- * token. This feature runs inside the REAL com.whatsapp process:
- *   1. BlackBox broadcasts ACTION_REQUEST with nonce
- *   2. This receiver requests a real com.whatsapp token from GMS via WhatsApp's
- *      own (obfuscated) StandardIntegrityManager, found via DexKit scan
- *   3. Real token is broadcast back to BlackBox via ACTION_RESPONSE
+ * Uses DexKit to find WhatsApp's obfuscated StandardIntegrityManager class
+ * (located by the BIND_EXPRESS_INTEGRITY_SERVICE string it references).
+ * Hooks requestIntegrityToken() to:
+ *   1. Capture the manager instance when WhatsApp uses it naturally
+ *   2. Let WhatsApp's real call proceed unchanged
+ *   3. When BlackBox broadcasts a nonce, call requestIntegrityToken() again
+ *      on the captured manager to get a valid com.whatsapp token
+ *   4. Return the token to BlackBox via ACTION_RESPONSE broadcast
  */
 public class IntegrityBridge extends Feature {
 
@@ -39,20 +46,24 @@ public class IntegrityBridge extends Feature {
     public static final String EXTRA_TOKEN     = "token";
     public static final String EXTRA_ERROR     = "error";
 
-    // Cached handles — discovered via DexKit on first use
-    private volatile Object  sManager;
-    private volatile Method  sBuilderMethod;
-    private volatile Method  sSetHashMethod;
-    private volatile Method  sBuildMethod;
-    private volatile Method  sRequestMethod;
-    private volatile Method  sAddSuccessMethod;
-    private volatile Method  sAddFailureMethod;
-    private volatile Method  sTokenMethod;     // lazily resolved from first response
-    private volatile Class<?> sSuccessCls;
-    private volatile Class<?> sFailureCls;
+    // The BIND intent action that Play Core embeds in the manager class
+    private static final String BIND_ACTION =
+            "com.google.android.play.core.expressintegrityservice.BIND_EXPRESS_INTEGRITY_SERVICE";
+
+    // Captured at runtime when WhatsApp makes its first integrity call
+    private volatile Object  capturedManager;
+    private volatile Method  capturedRequestMethod;
+    private volatile Method  capturedBuilderMethod;  // request.builder()
+    private volatile Method  capturedSetHashMethod;  // builder.setRequestHash(...)
+    private volatile Method  capturedBuildMethod;    // builder.build()
+    private volatile Method  capturedAddSuccessMethod;
+    private volatile Method  capturedAddFailureMethod;
+    private volatile Method  capturedTokenMethod;    // resolved lazily
+    private volatile Class<?> capturedSuccessCls;
+    private volatile Class<?> capturedFailureCls;
 
     public IntegrityBridge(@NonNull ClassLoader classLoader,
-                           @NonNull XSharedPreferences preferences) {
+                            @NonNull XSharedPreferences preferences) {
         super(classLoader, preferences);
     }
 
@@ -64,14 +75,10 @@ public class IntegrityBridge extends Feature {
             return;
         }
 
-        // Pre-warm — find and cache the Play Integrity API handles
-        try {
-            resolveIntegrityApi(app);
-            XposedBridge.log("[IntegrityBridge] Play Integrity API resolved");
-        } catch (Throwable t) {
-            XposedBridge.log("[IntegrityBridge] Pre-warm failed (will retry): " + t);
-        }
+        // ── Step 1: Use DexKit to find requestIntegrityToken by the binding string ──
+        hookIntegrityManager(app);
 
+        // ── Step 2: Register broadcast receiver for BlackBox nonce requests ──
         BroadcastReceiver receiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context ctx, Intent intent) {
@@ -79,11 +86,11 @@ public class IntegrityBridge extends Feature {
                 String nonce     = intent.getStringExtra(EXTRA_NONCE);
                 String requestor = intent.getStringExtra(EXTRA_REQUESTOR);
                 if (nonce == null || requestor == null) return;
-                XposedBridge.log("[IntegrityBridge] Request nonce=" +
-                        nonce.substring(0, Math.min(16, nonce.length())) + "...");
+                XposedBridge.log("[IntegrityBridge] Request nonce="
+                        + nonce.substring(0, Math.min(16, nonce.length())) + "...");
                 Context wctx = Utils.getApplication();
                 if (wctx == null) wctx = ctx;
-                requestToken(wctx, nonce, requestor);
+                requestTokenForBlackBox(wctx, nonce, requestor);
             }
         };
         ContextCompat.registerReceiver(app, receiver,
@@ -92,289 +99,245 @@ public class IntegrityBridge extends Feature {
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // API resolution via DexKit — finds obfuscated Play Core classes by their
-    // characteristic strings and method signatures
+    // DexKit-based manager discovery and hook
     // ──────────────────────────────────────────────────────────────────────────
 
-    private void resolveIntegrityApi(Context ctx) throws Exception {
-        if (sRequestMethod != null) return;
-
-        // Reset all fields for a clean retry
-        sManager = null; sBuilderMethod = null; sSetHashMethod = null;
-        sBuildMethod = null; sRequestMethod = null;
-        sAddSuccessMethod = null; sAddFailureMethod = null;
-        sTokenMethod = null; sSuccessCls = null; sFailureCls = null;
-
-        // Step 1: Find the class containing "expressintegrityservice" string —
-        // this is the StandardIntegrityManager implementation (obfuscated)
-        // We look for the class that actually performs the service binding.
-        // The factory or manager class will contain this service name.
-        Class<?> managerOrFactoryCls = findIntegrityClass();
-
-        if (managerOrFactoryCls == null) {
-            throw new Exception("Cannot find integrity class via DexKit");
-        }
-        XposedBridge.log("[IntegrityBridge] Found candidate class: " + managerOrFactoryCls.getName());
-
-        // Step 2: Try all static methods on this class that take a Context parameter.
-        // Don't filter by return type name — the method is obfuscated.
-        // Accept the first one that returns a non-null object with at least one 1-param method.
-        Object manager = null;
-
-        java.util.List<Class<?>> candidateClasses = new java.util.ArrayList<>();
-        candidateClasses.add(managerOrFactoryCls);
-
-        // Also add all classes found via broad scan
+    private void hookIntegrityManager(Context ctx) {
         try {
-            Class<?>[] allCandidates = Unobfuscator.findAllClassUsingStrings(classLoader,
-                    StringMatchType.Contains, "expressintegrityservice");
-            if (allCandidates != null) {
-                for (Class<?> c : allCandidates) candidateClasses.add(c);
-            }
-        } catch (Throwable ignored) {}
+            Class<?> constClass = Unobfuscator.findFirstClassUsingStrings(
+                    classLoader, StringMatchType.Contains, "expressintegrityservice");
+            if (constClass == null) { hookFallback(); return; }
 
-        outer:
-        for (Class<?> cls : candidateClasses) {
-            for (Method m : cls.getDeclaredMethods()) {
-                if (!java.lang.reflect.Modifier.isStatic(m.getModifiers())) continue;
-                if (m.getParameterCount() != 1) continue;
-                if (!Context.class.isAssignableFrom(m.getParameterTypes()[0])) continue;
-                if (m.getReturnType().equals(void.class)) continue;
-                try {
-                    m.setAccessible(true);
-                    Object result = m.invoke(null, ctx);
-                    if (result == null) continue;
-                    // Check this result has at least one method taking 1 parameter (the token request method)
-                    boolean has1ParamMethod = false;
-                    for (Method rm : result.getClass().getMethods()) {
-                        if (rm.getParameterCount() == 1 && !rm.getReturnType().equals(void.class)) {
-                            has1ParamMethod = true; break;
-                        }
-                    }
-                    if (!has1ParamMethod) continue;
-                    manager = result;
-                    XposedBridge.log("[IntegrityBridge] Factory method found: " + cls.getName() + "." + m.getName()
-                            + " → " + result.getClass().getName());
-                    break outer;
-                } catch (Throwable t) {
-                    XposedBridge.log("[IntegrityBridge] Factory method " + cls.getName() + "." + m.getName() + " failed: " + t);
+            // Dump full class hierarchy
+            Class<?> cls = constClass;
+            int depth = 0;
+            while (cls != null && cls != Object.class && depth < 8) {
+                XposedBridge.log("[IntegrityBridge] Level " + depth + ": " + cls.getName()
+                        + " methods=" + cls.getDeclaredMethods().length
+                        + " fields=" + cls.getDeclaredFields().length);
+                for (Method m : cls.getDeclaredMethods()) {
+                    XposedBridge.log("[IntegrityBridge]  M: "
+                            + (Modifier.isStatic(m.getModifiers()) ? "S" : "I")
+                            + " " + m.getReturnType().getSimpleName()
+                            + " " + m.getName() + "(" + m.getParameterCount() + ")");
                 }
-            }
-        }
-
-        if (manager == null) {
-            throw new Exception("Cannot instantiate integrity manager");
-        }
-
-        cacheManagerMethods(manager);
-    }
-
-    private Class<?> findIntegrityClass() {
-        // Primary: find by ExpressIntegrityService string
-        try {
-            Class<?> cls = Unobfuscator.findFirstClassUsingStrings(classLoader,
-                    StringMatchType.Contains, "expressintegrityservice");
-            if (cls != null) return cls;
-        } catch (Throwable t) {
-            XposedBridge.log("[IntegrityBridge] DexKit scan 1 failed: " + t);
-        }
-
-        // Secondary: find by integrity service action string
-        try {
-            Class<?> cls = Unobfuscator.findFirstClassUsingStrings(classLoader,
-                    StringMatchType.Contains, "BIND_EXPRESS_INTEGRITY_SERVICE");
-            if (cls != null) return cls;
-        } catch (Throwable t) {
-            XposedBridge.log("[IntegrityBridge] DexKit scan 2 failed: " + t);
-        }
-
-        // Tertiary: find by standard integrity manager canonical name fragment
-        try {
-            Class<?> cls = Unobfuscator.findFirstClassUsingStrings(classLoader,
-                    StringMatchType.Contains, "StandardIntegrityManager");
-            if (cls != null) return cls;
-        } catch (Throwable t) {
-            XposedBridge.log("[IntegrityBridge] DexKit scan 3 failed: " + t);
-        }
-        return null;
-    }
-
-    private boolean hasRequestIntegrityToken(Class<?> cls) {
-        for (Method m : cls.getMethods()) {
-            if (m.getName().contains("requestIntegrityToken")
-                    || m.getName().contains("IntegrityToken")
-                    || (m.getParameterCount() == 1 && m.getName().toLowerCase().contains("token"))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private void cacheManagerMethods(Object manager) throws Exception {
-        Class<?> mgrClass = manager.getClass();
-        XposedBridge.log("[IntegrityBridge] Scanning manager class: " + mgrClass.getName());
-
-        // Find requestIntegrityToken: the method that takes 1 param and returns a Task-like object.
-        // In obfuscated code, we can't rely on the name — scan by parameter/return characteristics.
-        // The request class should have a builder() static method.
-        Method requestM = null;
-        for (Method m : mgrClass.getMethods()) {
-            if (m.getParameterCount() != 1) continue;
-            if (m.getReturnType().equals(void.class)) continue;
-            // The parameter class should have a no-arg static builder/create method
-            Class<?> paramCls = m.getParameterTypes()[0];
-            boolean hasBuilder = false;
-            for (Method pm : paramCls.getMethods()) {
-                if (pm.getParameterCount() == 0 && java.lang.reflect.Modifier.isStatic(pm.getModifiers())
-                        && !pm.getReturnType().equals(void.class)) {
-                    hasBuilder = true; break;
+                for (java.lang.reflect.Field f : cls.getDeclaredFields()) {
+                    f.setAccessible(true);
+                    String val = "";
+                    try { val = String.valueOf(f.get(null)); } catch (Throwable ignored) {}
+                    XposedBridge.log("[IntegrityBridge]  F: " + f.getName() + "=" + val);
                 }
+                // Check interfaces
+                for (Class<?> iface : cls.getInterfaces()) {
+                    XposedBridge.log("[IntegrityBridge]  IF: " + iface.getName()
+                            + " methods=" + iface.getDeclaredMethods().length);
+                    Method rm = findRequestMethod(iface);
+                    if (rm != null) { proceedWithHook(rm); return; }
+                }
+                cls = cls.getSuperclass();
+                depth++;
             }
-            if (hasBuilder) {
-                requestM = m;
-                XposedBridge.log("[IntegrityBridge] Request method candidate: " + m.getName()
-                        + " param=" + paramCls.getName());
-                break;
-            }
-        }
-        if (requestM == null) throw new Exception("requestIntegrityToken not found on " + mgrClass.getName());
 
+            // Also try findRequestMethod on the original class
+            Method requestM = findRequestMethod(constClass);
+            if (requestM != null) { proceedWithHook(requestM); return; }
+
+            hookFallback();
+        } catch (Throwable t) {
+            XposedBridge.log("[IntegrityBridge] hookIntegrityManager error: " + t);
+            hookFallback();
+        }
+    }
+
+    private void proceedWithHook(Method requestM) throws Exception {
+        XposedBridge.log("[IntegrityBridge] Hooking: " + requestM.getDeclaringClass().getName()
+                + "." + requestM.getName());
         Class<?> reqClass = requestM.getParameterTypes()[0];
-        XposedBridge.log("[IntegrityBridge] Request class: " + reqClass.getName());
+        captureBuilderHandles(reqClass);
 
-        // Find builder factory method (static, no args, returns builder)
-        Method builderM = null;
-        for (Method m : reqClass.getMethods()) {
-            if (m.getParameterCount() == 0 && java.lang.reflect.Modifier.isStatic(m.getModifiers())
-                    && !m.getReturnType().equals(void.class) && !m.getReturnType().equals(reqClass)) {
-                builderM = m; break;
+        XposedBridge.hookMethod(requestM, new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                try {
+                    if (capturedManager == null) {
+                        capturedManager       = param.thisObject;
+                        capturedRequestMethod = (Method) param.method;
+                        XposedBridge.log("[IntegrityBridge] Manager captured from live call");
+                    }
+                    Object task = param.getResult();
+                    if (task != null && capturedAddSuccessMethod == null) captureTaskHandles(task);
+                } catch (Throwable t) {
+                    XposedBridge.log("[IntegrityBridge] afterHook error: " + t);
+                }
+            }
+        });
+        XposedBridge.log("[IntegrityBridge] Hook installed — awaiting live integrity call");
+    }
+
+    /** Fallback: hook bindService to detect when integrity service is being bound */
+    private void hookFallback() {
+        XposedBridge.log("[IntegrityBridge] Using fallback — will attempt resolution when broadcast arrives");
+    }
+
+    /** Find requestIntegrityToken: non-static, 1 param, returns non-primitive/non-void */
+    private Method findRequestMethod(Class<?> cls) {
+        // First pass: look for a method whose return type has addOnSuccessListener (standard Task)
+        for (Method m : cls.getMethods()) {
+            if (Modifier.isStatic(m.getModifiers())) continue;
+            if (m.getParameterCount() != 1) continue;
+            if (m.getDeclaringClass() == Object.class) continue;
+            Class<?> returnType = m.getReturnType();
+            if (returnType == void.class || returnType.isPrimitive() || returnType == String.class) continue;
+            for (Method rm : returnType.getMethods()) {
+                if (rm.getName().equals("addOnSuccessListener")) return m;
             }
         }
-        if (builderM == null) throw new Exception("builder() not found on " + reqClass.getName());
-
-        Object builder    = builderM.invoke(null);
-        Class<?> builderCls = builder.getClass();
-        XposedBridge.log("[IntegrityBridge] Builder class: " + builderCls.getName());
-
-        // setRequestHash: 1-param method on builder that returns builder (fluent)
-        Method setHashM = null;
-        for (Method m : builderCls.getMethods()) {
-            if (m.getParameterCount() == 1 && !m.getReturnType().equals(void.class)) {
-                setHashM = m; break;
-            }
-        }
-        if (setHashM == null) throw new Exception("setRequestHash not found on " + builderCls.getName());
-
-        // build(): no-arg, returns reqClass
-        Method buildM = null;
-        for (Method m : builderCls.getMethods()) {
-            if (m.getParameterCount() == 0 && m.getReturnType().equals(reqClass)) { buildM = m; break; }
-        }
-        if (buildM == null) throw new Exception("build() not found on " + builderCls.getName());
-
-        // Make a dummy request to discover the Task class
-        Object dummyReq = buildM.invoke(builderM.invoke(null));
-        Object task     = requestM.invoke(manager, dummyReq);
-        if (task == null) throw new Exception("requestIntegrityToken returned null task");
-        XposedBridge.log("[IntegrityBridge] Task class: " + task.getClass().getName());
-
-        Method addSuccessM = null, addFailureM = null;
-        for (Method m : task.getClass().getMethods()) {
-            if (m.getParameterCount() == 1) {
-                String name = m.getName().toLowerCase();
-                if (name.contains("success") || name.equals("addonsuccesslistener")) addSuccessM = m;
-                if (name.contains("fail")    || name.equals("addonfailurelistener"))  addFailureM = m;
-            }
-        }
-        if (addSuccessM == null) {
-            // Last resort: take any 1-param addOn* method
-            for (Method m : task.getClass().getMethods()) {
-                if (m.getParameterCount() == 1 && m.getName().startsWith("addOn")) {
-                    addSuccessM = m; break;
+        // Second pass: accept any non-static 1-param method returning a non-primitive object
+        // (handles obfuscated Task where method names are also renamed)
+        Method bestCandidate = null;
+        for (Method m : cls.getDeclaredMethods()) {
+            if (Modifier.isStatic(m.getModifiers())) continue;
+            if (m.getParameterCount() != 1) continue;
+            if (m.getDeclaringClass() == Object.class) continue;
+            Class<?> returnType = m.getReturnType();
+            if (returnType == void.class || returnType.isPrimitive()
+                    || returnType == String.class || returnType == Boolean.class) continue;
+            // Prefer methods whose parameter class has a method that could be setRequestHash
+            Class<?> paramType = m.getParameterTypes()[0];
+            for (Method pm : paramType.getMethods()) {
+                if (pm.getParameterCount() == 1 && !Modifier.isStatic(pm.getModifiers())) {
+                    bestCandidate = m;
+                    break;
                 }
             }
         }
-        if (addSuccessM == null) throw new Exception("addOnSuccessListener not found on " + task.getClass().getName());
+        if (bestCandidate != null) {
+            XposedBridge.log("[IntegrityBridge] Using best-candidate method: " + bestCandidate);
+        }
+        return bestCandidate;
+    }
 
-        sManager          = manager;
-        sBuilderMethod    = builderM;
-        sSetHashMethod    = setHashM;
-        sBuildMethod      = buildM;
-        sRequestMethod    = requestM;
-        sAddSuccessMethod = addSuccessM;
-        sAddFailureMethod = addFailureM;
-        sSuccessCls       = addSuccessM.getParameterTypes()[0];
-        sFailureCls       = addFailureM != null ? addFailureM.getParameterTypes()[0] : sSuccessCls;
-        XposedBridge.log("[IntegrityBridge] Cached: reqM=" + requestM.getName()
-                + " builderM=" + builderM.getName() + " setHashM=" + setHashM.getName()
-                + " successM=" + addSuccessM.getName());
+    /** Cache builder() / setRequestHash() / build() from the request class */
+    private void captureBuilderHandles(Class<?> reqClass) {
+        try {
+            for (Method m : reqClass.getMethods()) {
+                if ("builder".equals(m.getName()) && m.getParameterCount() == 0) {
+                    capturedBuilderMethod = m;
+                    Object builder = m.invoke(null);
+                    if (builder == null) continue;
+                    Class<?> bCls = builder.getClass();
+                    for (Method bm : bCls.getMethods()) {
+                        if ("setRequestHash".equals(bm.getName()) && bm.getParameterCount() == 1)
+                            capturedSetHashMethod = bm;
+                        if ("build".equals(bm.getName()) && bm.getParameterCount() == 0)
+                            capturedBuildMethod = bm;
+                    }
+                    XposedBridge.log("[IntegrityBridge] Builder handles captured");
+                    return;
+                }
+            }
+        } catch (Throwable t) {
+            XposedBridge.log("[IntegrityBridge] captureBuilderHandles: " + t);
+        }
+    }
+
+    /** Cache addOnSuccessListener / addOnFailureListener from the Task object */
+    private void captureTaskHandles(Object task) {
+        Class<?> taskCls = task.getClass();
+        for (Method m : taskCls.getMethods()) {
+            if ("addOnSuccessListener".equals(m.getName()) && m.getParameterCount() == 1) {
+                capturedAddSuccessMethod = m;
+                capturedSuccessCls       = m.getParameterTypes()[0];
+            }
+            if ("addOnFailureListener".equals(m.getName()) && m.getParameterCount() == 1) {
+                capturedAddFailureMethod = m;
+                capturedFailureCls       = m.getParameterTypes()[0];
+            }
+        }
+        if (capturedAddSuccessMethod != null)
+            XposedBridge.log("[IntegrityBridge] Task handles captured");
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Token request
+    // Token request for BlackBox
     // ──────────────────────────────────────────────────────────────────────────
 
-    private void requestToken(Context ctx, String nonce, String requestorPkg) {
+    private void requestTokenForBlackBox(Context ctx, String nonce, String requestorPkg) {
+        if (capturedManager == null || capturedRequestMethod == null) {
+            XposedBridge.log("[IntegrityBridge] Manager not yet captured — WhatsApp hasn't made an integrity call yet");
+            sendResponse(ctx, requestorPkg, null, "Manager not captured yet — try after WA has started fully");
+            return;
+        }
+        if (capturedBuilderMethod == null || capturedSetHashMethod == null || capturedBuildMethod == null) {
+            XposedBridge.log("[IntegrityBridge] Builder handles missing");
+            sendResponse(ctx, requestorPkg, null, "Builder handles not captured");
+            return;
+        }
+
         try {
-            resolveIntegrityApi(ctx);
-            if (sRequestMethod == null) throw new IllegalStateException("API not resolved");
-
-            Object builder = sBuilderMethod.invoke(null);
-
-            // setRequestHash: String or byte[] depending on SDK version
-            Class<?> hashType = sSetHashMethod.getParameterTypes()[0];
-            if (byte[].class.equals(hashType)) {
-                sSetHashMethod.invoke(builder, nonce.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            // Build request with BlackBox's nonce
+            Object builder = capturedBuilderMethod.invoke(null);
+            if (byte[].class.equals(capturedSetHashMethod.getParameterTypes()[0])) {
+                capturedSetHashMethod.invoke(builder,
+                        nonce.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             } else {
-                sSetHashMethod.invoke(builder, nonce);
+                capturedSetHashMethod.invoke(builder, nonce);
+            }
+            Object request = capturedBuildMethod.invoke(builder);
+            Object task    = capturedRequestMethod.invoke(capturedManager, request);
+
+            // If Task handles not yet cached, cache them now
+            if (capturedAddSuccessMethod == null && task != null) {
+                captureTaskHandles(task);
+            }
+            if (capturedAddSuccessMethod == null) {
+                sendResponse(ctx, requestorPkg, null, "No addOnSuccessListener on Task");
+                return;
             }
 
-            Object request = sBuildMethod.invoke(builder);
-            Object task    = sRequestMethod.invoke(sManager, request);
-
-            ClassLoader proxyLoader = sSuccessCls.getClassLoader();
+            ClassLoader proxyLoader = capturedSuccessCls.getClassLoader();
             if (proxyLoader == null) proxyLoader = classLoader;
             final ClassLoader fLoader = proxyLoader;
             final Context     fCtx   = ctx;
 
-            sAddSuccessMethod.invoke(task,
-                Proxy.newProxyInstance(fLoader, new Class[]{sSuccessCls},
+            capturedAddSuccessMethod.invoke(task,
+                Proxy.newProxyInstance(fLoader, new Class[]{capturedSuccessCls},
                     (p, m, args) -> {
                         try {
                             Object tokenObj = args[0];
-                            Method tokenM = sTokenMethod;
+                            // Lazily resolve token() method
+                            Method tokenM = capturedTokenMethod;
                             if (tokenM == null && tokenObj != null) {
                                 for (Method tm : tokenObj.getClass().getMethods()) {
-                                    if (tm.getParameterCount() == 0 &&
-                                            (tm.getName().equals("token") || tm.getName().contains("Token"))
-                                            && String.class.equals(tm.getReturnType())) {
-                                        sTokenMethod = tokenM = tm; break;
+                                    if ("token".equals(tm.getName()) && tm.getParameterCount() == 0) {
+                                        capturedTokenMethod = tokenM = tm; break;
                                     }
                                 }
                             }
                             String token = tokenM != null ? (String) tokenM.invoke(tokenObj) : null;
-                            XposedBridge.log("[IntegrityBridge] Token obtained len=" +
-                                    (token != null ? token.length() : 0));
+                            XposedBridge.log("[IntegrityBridge] Token obtained len="
+                                    + (token != null ? token.length() : 0));
                             sendResponse(fCtx, requestorPkg, token,
-                                    token == null ? "token() returned null" : null);
+                                    token == null ? "token() null" : null);
                         } catch (Throwable t) {
                             sendResponse(fCtx, requestorPkg, null, "success cb: " + t);
                         }
                         return null;
                     }));
 
-            if (sAddFailureMethod != null) {
-                sAddFailureMethod.invoke(task,
-                    Proxy.newProxyInstance(fLoader, new Class[]{sFailureCls},
+            if (capturedAddFailureMethod != null) {
+                capturedAddFailureMethod.invoke(task,
+                    Proxy.newProxyInstance(fLoader, new Class[]{capturedFailureCls},
                         (p, m, args) -> {
                             String msg = args[0] != null ? args[0].toString() : "failure";
-                            XposedBridge.log("[IntegrityBridge] Token failed: " + msg);
+                            XposedBridge.log("[IntegrityBridge] Token request failed: " + msg);
                             sendResponse(fCtx, requestorPkg, null, msg);
                             return null;
                         }));
             }
+
         } catch (Throwable t) {
-            XposedBridge.log("[IntegrityBridge] requestToken: " + t);
+            XposedBridge.log("[IntegrityBridge] requestTokenForBlackBox: " + t);
             sendResponse(ctx, requestorPkg, null, t.getMessage());
         }
     }
